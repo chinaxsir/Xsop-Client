@@ -5,8 +5,18 @@ class FlarumUser {
   final String username;
   final String displayName;
   final String? avatarUrl;
+  // [修改备注：新增用户的资产和统计数据字段]
+  final String money; 
+  final String likesReceived;
 
-  FlarumUser({required this.id, required this.username, required this.displayName, this.avatarUrl});
+  FlarumUser({
+    required this.id, 
+    required this.username, 
+    required this.displayName, 
+    this.avatarUrl,
+    this.money = '0',
+    this.likesReceived = '0',
+  });
 }
 
 class FlarumTag {
@@ -15,7 +25,7 @@ class FlarumTag {
   final String slug;
   final String? description;
   final String? color;
-  final bool isPrimary; // 明确区分主标签和次标签
+  final bool isPrimary; 
   final int? position; 
   final bool canStartDiscussion;
 
@@ -70,6 +80,9 @@ FlarumUser parseUser(Map<String, dynamic> json, String baseUrl) {
     username: attrs['username'] ?? 'Unknown',
     displayName: attrs['displayName'] ?? attrs['username'] ?? 'Unknown',
     avatarUrl: avatar,
+    // [修改备注：尝试解析 Flarum 插件的通用资产字段，容错处理]
+    money: attrs['money']?.toString() ?? '0',
+    likesReceived: attrs['likesReceived']?.toString() ?? '0',
   );
 }
 
@@ -82,7 +95,6 @@ List<FlarumTag> parseTags(Map<String, dynamic> json) {
     final pos = attrs['position'];
     bool hasPosition = false;
     
-    // [核心修复：极高容错率判定！拦截 API 可能下发的所有形式的空位]
     if (pos is int) {
       hasPosition = true;
     } else if (pos is String && pos.trim().isNotEmpty && pos.trim().toLowerCase() != 'null') {
@@ -93,8 +105,6 @@ List<FlarumTag> parseTags(Map<String, dynamic> json) {
 
     final hasParent = rels['parent'] != null && rels['parent']['data'] != null;
     final bool isChild = attrs['isChild'] == true || hasParent;
-    
-    // 只有明确包含 position 数字，且不是子节点的，才被认定为"主标签"
     final bool isPrimary = hasPosition && !isChild;
 
     return FlarumTag(
@@ -103,7 +113,7 @@ List<FlarumTag> parseTags(Map<String, dynamic> json) {
       slug: attrs['slug'] ?? '',
       description: attrs['description'],
       color: attrs['color'],
-      isPrimary: isPrimary, // 严格标识
+      isPrimary: isPrimary,
       position: pos is int ? pos : null,
       canStartDiscussion: attrs['canStartDiscussion'] ?? true,
     );
@@ -127,6 +137,9 @@ DiscussionList parseDiscussionList(Map<String, dynamic> json, String baseUrl) {
         username: attrs['username'] ?? '',
         displayName: attrs['displayName'] ?? attrs['username'] ?? '',
         avatarUrl: avatar,
+        // [修改备注：在解析帖子列表作者时，也一并保存其资产信息]
+        money: attrs['money']?.toString() ?? '0',
+        likesReceived: attrs['likesReceived']?.toString() ?? '0',
       );
     } else if (item['type'] == 'tags') {
       final attrs = item['attributes'] ?? {};
