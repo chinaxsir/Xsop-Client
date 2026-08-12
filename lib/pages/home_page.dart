@@ -26,7 +26,6 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  // [核心修复1：引入全局脚手架钥匙，用于获得 100% 绝对控制权来关闭侧边栏]
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   
   final ScrollController _scrollController = ScrollController();
@@ -151,30 +150,24 @@ class _HomePageState extends State<HomePage> {
       }
     } catch (_) {
     } finally {
-      if (mounted) setState(() => _loadingMobile = false); // 这里修正为 _loadingMore
-      // 上面笔误修正：
+      // [修改备注：彻底移除了导致编译报错的 _loadingMobile 笔误代码，只保留正确的变量]
       if (mounted) setState(() => _loadingMore = false);
     }
   }
 
-  // [核心修复2：使用全局钥匙强制安全地关闭抽屉，不再依赖路由 pop，彻底解决遮挡问题]
   void _selectTag(String? slug) {
-    // 强制关闭侧边栏
     _scaffoldKey.currentState?.closeDrawer();
     
-    // 如果点击的是当前已选中的标签，不再重复请求
     if (slug == _selectedTagSlug) return;
     
     setState(() {
       _selectedTagSlug = slug;
     });
     
-    // 滚动回顶部
     if (_scrollController.hasClients) {
       _scrollController.jumpTo(0);
     }
     
-    // 触发网络刷新
     _refresh();
   }
 
@@ -203,7 +196,6 @@ class _HomePageState extends State<HomePage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      // [核心修复3：将定义好的钥匙绑定给主 Scaffold]
       key: _scaffoldKey,
       appBar: AppBar(
         titleSpacing: 0,
