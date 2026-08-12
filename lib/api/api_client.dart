@@ -59,7 +59,7 @@ class ApiClient {
     return data;
   }
 
-  // [核心修复：采用嵌套 Map 构建 filter，让网络层自动将其正确编码为 Flarum PHP 后端能识别的 filter[tag] 和 filter[q]]
+  // [修改备注：使用极其扁平的 Map 键值对，保证 Dio 自动组装出 Flarum 原生支持的精确 URL 结构]
   Future<Map<String, dynamic>> getDiscussions({
     int page = 1,
     int pageSize = 20,
@@ -68,33 +68,23 @@ class ApiClient {
     String? sort,
   }) async {
     final query = <String, dynamic>{
-      'page': {
-        'number': page,
-        'size': pageSize,
-      }
+      'page[number]': page,
+      'page[size]': pageSize,
     };
     
-    final filter = <String, dynamic>{};
-    List<String> searchQueries = [];
-    
+    // 原生 Flarum Tag 过滤专属参数
     if (tag != null && tag.isNotEmpty) {
-      filter['tag'] = tag.trim(); // Flarum 官方原生标签过滤
-      searchQueries.add('tag:${tag.trim()}'); // 搜索引擎二次兜底
+      query['filter[tag]'] = tag.trim();
     }
     
+    // 原生 Flarum 作者过滤专属参数 (针对我的发帖页面)
     if (author != null && author.isNotEmpty) {
-      searchQueries.add('author:${author.trim()}');
+      query['filter[q]'] = 'author:${author.trim()}';
     }
     
-    if (searchQueries.isNotEmpty) {
-      filter['q'] = searchQueries.join(' ');
+    if (sort != null) {
+      query['sort'] = sort;
     }
-    
-    if (filter.isNotEmpty) {
-      query['filter'] = filter; // 将构建好的嵌套字典塞入 query
-    }
-
-    if (sort != null) query['sort'] = sort;
 
     final response = await _dio.get('/api/discussions', queryParameters: query);
     return _asMap(response.data);
@@ -109,10 +99,8 @@ class ApiClient {
     final response = await _dio.get(
       '/api/discussions/$id',
       queryParameters: {
-        'page': {
-          'number': page,
-          'size': pageSize,
-        },
+        'page[number]': page,
+        'page[size]': pageSize,
         'include': include,
       },
     );
