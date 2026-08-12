@@ -5,7 +5,7 @@ import 'package:xsop_forum/models/flarum_models.dart';
 import 'package:xsop_forum/main.dart'; 
 
 import 'package:xsop_forum/pages/discussion_detail_page.dart'; 
-import 'package:xsop_forum/pages/home_page.dart' show formatRelativeTime, HomePage; // 引入 HomePage 用于彻底重置状态
+import 'package:xsop_forum/pages/home_page.dart' show formatRelativeTime; 
 
 class UserProfilePage extends StatelessWidget {
   final FlarumUser user;
@@ -54,6 +54,32 @@ class UserProfilePage extends StatelessWidget {
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                         color: scheme.outline,
                       ),
+                ),
+                const SizedBox(height: 16),
+                
+                // [修改备注：根据网页版截图渲染深色底的金币资产栏]
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF3B3833), // 深色徽章背景
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.military_tech, size: 16, color: Colors.white),
+                      const SizedBox(width: 4),
+                      Text('4', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)), // 这里预留了勋章占位
+                      const SizedBox(width: 12),
+                      
+                      const Icon(Icons.thumb_up, size: 14, color: Colors.amber),
+                      const SizedBox(width: 4),
+                      Text(user.likesReceived, style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 13)),
+                      const SizedBox(width: 12),
+                      
+                      Text('${user.money} XSD', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                    ],
+                  ),
                 ),
               ],
             ),
@@ -289,7 +315,6 @@ class SettingsPage extends StatelessWidget {
       ),
       body: ListView(
         children: [
-          // [修复1：清理冗余，只有退出登录]
           ListTile(
             title: const Text('退出登录', style: TextStyle(color: Colors.red)),
             leading: const Icon(Icons.exit_to_app, color: Colors.red),
@@ -311,10 +336,9 @@ class SettingsPage extends StatelessWidget {
                       onPressed: () async {
                         await apiClient.logout();
                         if (context.mounted) {
-                          // [修复1核心：强行销毁并重建所有路由，退出立马生效，页面自动变成未登录状态]
                           Navigator.pushAndRemoveUntil(
                             context,
-                            MaterialPageRoute(builder: (context) => HomePage(api: apiClient)),
+                            MaterialPageRoute(builder: (context) => const XSOPForumApp()),
                             (route) => false,
                           );
                         }
