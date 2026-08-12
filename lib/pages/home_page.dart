@@ -152,13 +152,26 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  void _selectTag(String? slug) {
-    if (Scaffold.of(context).isDrawerOpen) {
+  // [核心修复：废弃 Scaffold.of 判断，通过传入 fromDrawer 标志位来安全关闭抽屉]
+  void _selectTag(String? slug, {bool fromDrawer = false}) {
+    // 如果是从侧边栏点击进来的，安全执行 pop 关闭侧边栏
+    if (fromDrawer) {
       Navigator.of(context).pop(); 
     }
+    
+    // 如果点击的是已经选中的标签，直接返回，不重复刷新
     if (slug == _selectedTagSlug) return;
-    setState(() => _selectedTagSlug = slug);
-    _refresh();
+    
+    setState(() {
+      _selectedTagSlug = slug;
+    });
+    
+    // 切换分类后自动滚动到列表顶部
+    if (_scrollController.hasClients) {
+      _scrollController.jumpTo(0);
+    }
+    
+    _refresh(); // 触发网络请求刷新数据
   }
 
   void _onTapCreateDiscussion() async {
@@ -266,7 +279,6 @@ class _HomePageState extends State<HomePage> {
   Widget _buildDrawer() {
     final scheme = Theme.of(context).colorScheme;
     
-    // [核心配合：使用最新的 isPrimary 判断字段]
     final primaryTags = _allTags.where((t) => t.isPrimary).toList();
     final secondaryTags = _allTags.where((t) => !t.isPrimary).toList();
 
@@ -294,7 +306,8 @@ class _HomePageState extends State<HomePage> {
                     iconColor: scheme.primary,
                     title: '全部',
                     isSelected: _selectedTagSlug == null,
-                    onTap: () => _selectTag(null),
+                    // [配合修复：明确声明 fromDrawer: true，确保能顺利关闭抽屉并刷新数据]
+                    onTap: () => _selectTag(null, fromDrawer: true),
                   ),
                   const Padding(
                     padding: EdgeInsets.symmetric(vertical: 8),
@@ -311,7 +324,8 @@ class _HomePageState extends State<HomePage> {
                         iconColor: _parseColor(tag.color) ?? scheme.primary,
                         title: tag.name,
                         isSelected: _selectedTagSlug == tag.slug,
-                        onTap: () => _selectTag(tag.slug),
+                        // [配合修复：同上]
+                        onTap: () => _selectTag(tag.slug, fromDrawer: true),
                       ),
                   ],
 
@@ -325,7 +339,8 @@ class _HomePageState extends State<HomePage> {
                         iconColor: _parseColor(tag.color) ?? scheme.primary,
                         title: tag.name,
                         isSelected: _selectedTagSlug == tag.slug,
-                        onTap: () => _selectTag(tag.slug),
+                        // [配合修复：同上]
+                        onTap: () => _selectTag(tag.slug, fromDrawer: true),
                       ),
                   ],
                   
@@ -418,8 +433,9 @@ class _HomePageState extends State<HomePage> {
                );
              }
           },
+          // [配合修复：在列表页直接点击标签时，不执行关闭侧边栏的操作]
           onTapTag: (String slug) {
-             _selectTag(slug);
+             _selectTag(slug, fromDrawer: false);
           },
         );
       },
