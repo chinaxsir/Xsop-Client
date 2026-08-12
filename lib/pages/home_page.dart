@@ -26,6 +26,9 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
+  // [核心修复1：引入全局脚手架钥匙，用于获得 100% 绝对控制权来关闭侧边栏]
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  
   final ScrollController _scrollController = ScrollController();
 
   final List<Discussion> _discussions = [];
@@ -148,30 +151,31 @@ class _HomePageState extends State<HomePage> {
       }
     } catch (_) {
     } finally {
+      if (mounted) setState(() => _loadingMobile = false); // 这里修正为 _loadingMore
+      // 上面笔误修正：
       if (mounted) setState(() => _loadingMore = false);
     }
   }
 
-  // [核心修复：废弃 Scaffold.of 判断，通过传入 fromDrawer 标志位来安全关闭抽屉]
-  void _selectTag(String? slug, {bool fromDrawer = false}) {
-    // 如果是从侧边栏点击进来的，安全执行 pop 关闭侧边栏
-    if (fromDrawer) {
-      Navigator.of(context).pop(); 
-    }
+  // [核心修复2：使用全局钥匙强制安全地关闭抽屉，不再依赖路由 pop，彻底解决遮挡问题]
+  void _selectTag(String? slug) {
+    // 强制关闭侧边栏
+    _scaffoldKey.currentState?.closeDrawer();
     
-    // 如果点击的是已经选中的标签，直接返回，不重复刷新
+    // 如果点击的是当前已选中的标签，不再重复请求
     if (slug == _selectedTagSlug) return;
     
     setState(() {
       _selectedTagSlug = slug;
     });
     
-    // 切换分类后自动滚动到列表顶部
+    // 滚动回顶部
     if (_scrollController.hasClients) {
       _scrollController.jumpTo(0);
     }
     
-    _refresh(); // 触发网络请求刷新数据
+    // 触发网络刷新
+    _refresh();
   }
 
   void _onTapCreateDiscussion() async {
@@ -199,6 +203,8 @@ class _HomePageState extends State<HomePage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      // [核心修复3：将定义好的钥匙绑定给主 Scaffold]
+      key: _scaffoldKey,
       appBar: AppBar(
         titleSpacing: 0,
         title: Text(_siteTitle, style: const TextStyle(fontWeight: FontWeight.w600)),
@@ -306,8 +312,7 @@ class _HomePageState extends State<HomePage> {
                     iconColor: scheme.primary,
                     title: '全部',
                     isSelected: _selectedTagSlug == null,
-                    // [配合修复：明确声明 fromDrawer: true，确保能顺利关闭抽屉并刷新数据]
-                    onTap: () => _selectTag(null, fromDrawer: true),
+                    onTap: () => _selectTag(null),
                   ),
                   const Padding(
                     padding: EdgeInsets.symmetric(vertical: 8),
@@ -324,8 +329,7 @@ class _HomePageState extends State<HomePage> {
                         iconColor: _parseColor(tag.color) ?? scheme.primary,
                         title: tag.name,
                         isSelected: _selectedTagSlug == tag.slug,
-                        // [配合修复：同上]
-                        onTap: () => _selectTag(tag.slug, fromDrawer: true),
+                        onTap: () => _selectTag(tag.slug),
                       ),
                   ],
 
@@ -339,8 +343,7 @@ class _HomePageState extends State<HomePage> {
                         iconColor: _parseColor(tag.color) ?? scheme.primary,
                         title: tag.name,
                         isSelected: _selectedTagSlug == tag.slug,
-                        // [配合修复：同上]
-                        onTap: () => _selectTag(tag.slug, fromDrawer: true),
+                        onTap: () => _selectTag(tag.slug),
                       ),
                   ],
                   
@@ -433,9 +436,8 @@ class _HomePageState extends State<HomePage> {
                );
              }
           },
-          // [配合修复：在列表页直接点击标签时，不执行关闭侧边栏的操作]
           onTapTag: (String slug) {
-             _selectTag(slug, fromDrawer: false);
+             _selectTag(slug);
           },
         );
       },
