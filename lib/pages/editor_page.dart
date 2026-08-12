@@ -33,6 +33,25 @@ class _EditorPageState extends State<EditorPage> {
 
   bool get _isNewPost => widget.discussion == null;
 
+  // [修改备注：插入 Markdown 语法的核心控制逻辑]
+  void _insertMarkdown(String prefix, String suffix) {
+    final text = _contentController.text;
+    final selection = _contentController.selection;
+
+    if (selection.isValid) {
+      final selectedText = selection.textInside(text);
+      final newText = text.replaceRange(selection.start, selection.end, '$prefix$selectedText$suffix');
+      _contentController.value = TextEditingValue(
+        text: newText,
+        selection: TextSelection.collapsed(offset: selection.start + prefix.length + selectedText.length + suffix.length),
+      );
+    } else {
+      final insertAt = text.length;
+      _contentController.text = text + prefix + suffix;
+      _contentController.selection = TextSelection.collapsed(offset: insertAt + prefix.length);
+    }
+  }
+
   Future<void> _submit() async {
     final content = _contentController.text.trim();
     if (content.isEmpty) {
@@ -51,11 +70,11 @@ class _EditorPageState extends State<EditorPage> {
       final secondaryTags = allowedTags.where((t) => !t.isPrimary).toList();
       
       if (_selectedPrimaryTag == null) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('发布失败：至少需要选择 1 个主标签')));
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('发布失败：必须选择一个主标签')));
         return;
       }
       if (secondaryTags.isNotEmpty && _selectedSecondaryTags.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('发布失败：至少需要选择 1 个次标签')));
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('发布失败：至少需要选择一个次级标签')));
         return;
       }
     }
@@ -106,24 +125,12 @@ class _EditorPageState extends State<EditorPage> {
     try {
       final url = await widget.api.uploadImage(pickedFile.path);
       if (url != null) {
-        final currentText = _contentController.text;
-        final selection = _contentController.selection;
-        final imageMarkdown = '\n![图片]($url)\n';
-        
-        if (selection.isValid) {
-          final newText = currentText.replaceRange(selection.start, selection.end, imageMarkdown);
-          _contentController.value = TextEditingValue(
-            text: newText,
-            selection: TextSelection.collapsed(offset: selection.start + imageMarkdown.length),
-          );
-        } else {
-          _contentController.text = currentText + imageMarkdown;
-        }
+        _insertMarkdown('\n![图片](', '$url)\n');
       } else {
          if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('上传未能获取到图片链接')));
       }
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('图片上传失败，请检查图床或 API 设置')));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('图片上传失败，请检查设置')));
     } finally {
       if (mounted) setState(() => _isUploading = false);
     }
@@ -138,10 +145,7 @@ class _EditorPageState extends State<EditorPage> {
 
   @override
   Widget build(BuildContext context) {
-    // 拉取所有允许发帖的标签
     final allowedTags = widget.availableTags?.where((t) => t.canStartDiscussion).toList() ?? [];
-    
-    // 基于全新的底层解析逻辑，主次分类将被完美拆解
     final primaryTags = allowedTags.where((t) => t.isPrimary).toList();
     final secondaryTags = allowedTags.where((t) => !t.isPrimary).toList();
 
@@ -156,13 +160,6 @@ class _EditorPageState extends State<EditorPage> {
           child: Container(color: const Color(0xFFE5E5EA), height: 0.5),
         ),
         actions: [
-          IconButton(
-            icon: _isUploading 
-                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                : const Icon(Icons.image_outlined),
-            onPressed: _isSubmitting || _isUploading ? null : _pickAndUploadImage,
-            tooltip: '插入图片',
-          ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             child: FilledButton(
@@ -269,8 +266,49 @@ class _EditorPageState extends State<EditorPage> {
               ),
             ),
           ),
+          
+          // [修改备注：全新引入的底部富文本 Markdown 编辑快捷栏，支持所有基础语法以及你的“付费阅读”等操作]
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: Colors.grey.shade50,
+              border: const Border(top: BorderSide(color: Color(0xFFE5E5EA), width: 0.5)),
+            ),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  IconButton(
+                    icon: _isUploading 
+                        ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.image_outlined),
+                    onPressed: _isSubmitting || _isUploading ? null : _pickAndUploadImage,
+                    tooltip: '插入图片',
+                    color: Colors.grey.shade700,
+                  ),
+                  _buildToolbarBtn(Icons.format_bold, () => _insertMarkdown('**', '**'), '加粗'),
+                  _buildToolbarBtn(Icons.format_italic, () => _insertMarkdown('*', '*'), '斜体'),
+                  _buildToolbarBtn(Icons.format_quote, () => _insertMarkdown('\n> ', '\n'), '引用'),
+                  _buildToolbarBtn(Icons.code, () => _insertMarkdown('\n```\n', '\n```\n'), '代码块'),
+                  _buildToolbarBtn(Icons.link, () => _insertMarkdown('[', '](https://)'), '插入链接'),
+                  _buildToolbarBtn(Icons.format_list_bulleted, () => _insertMarkdown('\n- ', ''), '无序列表'),
+                  _buildToolbarBtn(Icons.monetization_on_outlined, () => _insertMarkdown('[charge=10]', '[/charge]'), '插入付费阅读'),
+                ],
+              ),
+            ),
+          ),
         ],
       ),
+    );
+  }
+  
+  Widget _buildToolbarBtn(IconData icon, VoidCallback onPressed, String tooltip) {
+    return IconButton(
+      icon: Icon(icon),
+      onPressed: onPressed,
+      tooltip: tooltip,
+      color: Colors.grey.shade700,
+      iconSize: 22,
     );
   }
 }
