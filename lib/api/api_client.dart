@@ -59,7 +59,6 @@ class ApiClient {
     return data;
   }
 
-  // [修改备注：使用极其扁平的 Map 键值对，保证 Dio 自动组装出 Flarum 原生支持的精确 URL 结构]
   Future<Map<String, dynamic>> getDiscussions({
     int page = 1,
     int pageSize = 20,
@@ -72,12 +71,10 @@ class ApiClient {
       'page[size]': pageSize,
     };
     
-    // 原生 Flarum Tag 过滤专属参数
     if (tag != null && tag.isNotEmpty) {
       query['filter[tag]'] = tag.trim();
     }
     
-    // 原生 Flarum 作者过滤专属参数 (针对我的发帖页面)
     if (author != null && author.isNotEmpty) {
       query['filter[q]'] = 'author:${author.trim()}';
     }
@@ -172,6 +169,11 @@ class ApiClient {
     };
     final response = await _dio.post('/api/posts', data: data);
     return _asMap(response.data);
+  }
+
+  // [修改备注：新增删帖/删除回复的基础 API]
+  Future<void> deletePost(int postId) async {
+    await _dio.delete('/api/posts/$postId');
   }
 
   Future<void> likePost(int postId, bool isLiked) async {
