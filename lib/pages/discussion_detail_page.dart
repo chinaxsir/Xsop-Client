@@ -104,13 +104,22 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
     }
   }
 
-  Future<void> _showReportDialog(int postId) async {
-    final isLoggedIn = await widget.api.isLoggedIn;
-    if (!isLoggedIn) {
-      _promptLogin();
-      return;
+  // [修改备注：实现底层删帖接口调用逻辑]
+  Future<void> _deletePost(int postId, int index) async {
+    try {
+      await widget.api.deletePost(postId);
+      if (mounted) {
+        setState(() {
+          _posts.removeAt(index);
+        });
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('删除成功')));
+      }
+    } catch (_) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('删除失败，可能无权限')));
     }
+  }
 
+  Future<void> _showReportDialog(int postId) async {
     String selectedReason = 'spam';
     final detailController = TextEditingController();
 
@@ -220,13 +229,11 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      // [修改备注：强制页面背景为纯白，确保与主页风格统一]
       backgroundColor: Colors.white,
       appBar: AppBar(
         title: Text(widget.discussion.title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
         backgroundColor: Colors.white,
         surfaceTintColor: Colors.transparent,
-        // [修改备注：为导航栏底部增加一条极细的分割线，区分头部与正文]
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(0.5),
           child: Container(color: const Color(0xFFE5E5EA), height: 0.5),
@@ -238,7 +245,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           decoration: const BoxDecoration(
             color: Colors.white,
-            // [修改备注：去除了厚重的阴影，改用干净的顶部分割线]
             border: Border(top: BorderSide(color: Color(0xFFE5E5EA), width: 0.5)),
           ),
           child: InkWell(
@@ -247,7 +253,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               decoration: BoxDecoration(
-                // [修改备注：输入框背景使用更淡的灰色，显得更加现代]
                 color: Colors.grey.shade100,
                 borderRadius: BorderRadius.circular(24),
               ),
@@ -273,7 +278,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
       return Center(child: Text(_error!));
     }
 
-    // [修改备注：将 ListView.builder 改为 ListView.separated，用极细的分割线代替原本楼层之间的巨大留白和卡片边距]
     return ListView.separated(
       padding: EdgeInsets.zero,
       itemCount: _posts.length,
@@ -296,7 +300,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
         final likesCount = attrs['likesCount'] ?? 0;
 
         return Container(
-          // [修改备注：移除了 margin、borderRadius 和 boxShadow，让楼层扁平铺满屏幕]
           color: Colors.white,
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
           child: Column(
@@ -306,7 +309,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                 children: [
                   CircleAvatar(
                     radius: 18,
-                    // [修改备注：统一使用更淡的灰色作为无头像时的底色]
                     backgroundColor: Colors.grey.shade100,
                     backgroundImage: avatarUrl != null ? NetworkImage(avatarUrl) : null,
                     child: avatarUrl == null ? Icon(Icons.person, size: 20, color: Theme.of(context).colorScheme.primary) : null,
@@ -336,6 +338,8 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
               ),
 
               const SizedBox(height: 12),
+              
+              // [修改备注：根据网页版截图重排了底部的功能栏：赞、回复、以及 "..." 更多菜单栏]
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
@@ -349,24 +353,77 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                           Icon(
                             isLiked ? Icons.thumb_up : Icons.thumb_up_outlined, 
                             size: 16, 
-                            color: isLiked ? Theme.of(context).colorScheme.primary : Colors.grey.shade500
+                            color: isLiked ? Theme.of(context).colorScheme.primary : Colors.grey.shade700
                           ),
                           if (likesCount > 0) ...[
                             const SizedBox(width: 4),
-                            Text('$likesCount', style: TextStyle(color: isLiked ? Theme.of(context).colorScheme.primary : Colors.grey.shade500, fontSize: 13)),
+                            Text('$likesCount', style: TextStyle(color: isLiked ? Theme.of(context).colorScheme.primary : Colors.grey.shade700, fontSize: 13)),
                           ]
                         ],
                       ),
                     ),
                   ),
                   const SizedBox(width: 12),
+                  
                   InkWell(
-                    onTap: () => _showReportDialog(postId),
+                    onTap: _openReplyEditor,
                     borderRadius: BorderRadius.circular(16),
                     child: Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                      child: Icon(Icons.warning_amber_rounded, size: 18, color: Colors.grey.shade400),
+                      child: Text('回复', style: TextStyle(color: Colors.grey.shade700, fontSize: 13, fontWeight: FontWeight.w500)),
                     ),
+                  ),
+                  const SizedBox(width: 8),
+
+                  // [修改备注：高度还原网页版菜单：举报、打赏、编辑、投票、警告、删除]
+                  PopupMenuButton<String>(
+                    icon: Icon(Icons.more_horiz, color: Colors.grey.shade500),
+                    color: Colors.white,
+                    surfaceTintColor: Colors.transparent,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    onSelected: (value) async {
+                      final isLoggedIn = await widget.api.isLoggedIn;
+                      if (!isLoggedIn) {
+                        _promptLogin();
+                        return;
+                      }
+                      
+                      if (value == 'report') {
+                        _showReportDialog(postId);
+                      } else if (value == 'delete') {
+                        _deletePost(postId, index);
+                      } else {
+                        // 未开放功能的预留 Toast
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('移动端暂不支持此拓展操作')));
+                      }
+                    },
+                    itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
+                      const PopupMenuItem<String>(
+                        value: 'report',
+                        child: Row(children: [Icon(Icons.flag_outlined, size: 18), SizedBox(width: 8), Text('举报')]),
+                      ),
+                      const PopupMenuItem<String>(
+                        value: 'tip',
+                        child: Row(children: [Icon(Icons.card_giftcard, size: 18), SizedBox(width: 8), Text('打赏')]),
+                      ),
+                      const PopupMenuItem<String>(
+                        value: 'edit',
+                        child: Row(children: [Icon(Icons.edit_outlined, size: 18), SizedBox(width: 8), Text('编辑')]),
+                      ),
+                      const PopupMenuItem<String>(
+                        value: 'vote',
+                        child: Row(children: [Icon(Icons.how_to_vote_outlined, size: 18), SizedBox(width: 8), Text('投票详情')]),
+                      ),
+                      const PopupMenuItem<String>(
+                        value: 'warn',
+                        child: Row(children: [Icon(Icons.info_outline, size: 18), SizedBox(width: 8), Text('警告')]),
+                      ),
+                      const PopupMenuDivider(),
+                      const PopupMenuItem<String>(
+                        value: 'delete',
+                        child: Row(children: [Icon(Icons.delete_outline, size: 18, color: Colors.red), SizedBox(width: 8), Text('删除', style: TextStyle(color: Colors.red))]),
+                      ),
+                    ],
                   ),
                 ],
               )
