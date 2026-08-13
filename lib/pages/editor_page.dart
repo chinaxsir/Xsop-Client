@@ -2,6 +2,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart'; 
+import 'package:file_picker/file_picker.dart'; // [核心新增：文件选择库]
 import 'package:xsop_forum/api/api_client.dart';
 import 'package:xsop_forum/models/flarum_models.dart';
 
@@ -33,7 +34,6 @@ class _EditorPageState extends State<EditorPage> {
 
   bool get _isNewPost => widget.discussion == null;
 
-  // [修改备注：插入 Markdown 语法的核心控制逻辑]
   void _insertMarkdown(String prefix, String suffix) {
     final text = _contentController.text;
     final selection = _contentController.selection;
@@ -123,14 +123,38 @@ class _EditorPageState extends State<EditorPage> {
     setState(() => _isUploading = true);
     
     try {
-      final url = await widget.api.uploadImage(pickedFile.path);
-      if (url != null) {
-        _insertMarkdown('\n![图片](', '$url)\n');
+      final fileInfo = await widget.api.uploadFile(pickedFile.path);
+      if (fileInfo != null && fileInfo['url']!.isNotEmpty) {
+        _insertMarkdown('\n![图片](', '${fileInfo['url']})\n');
       } else {
-         if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('上传未能获取到图片链接')));
+         if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('上传未能获取到链接')));
       }
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('图片上传失败，请检查设置')));
+    } finally {
+      if (mounted) setState(() => _isUploading = false);
+    }
+  }
+
+  // [核心新增：使用 FilePicker 让用户从手机存储中选择任意类型附件]
+  Future<void> _pickAndUploadAttachment() async {
+    final result = await FilePicker.platform.pickFiles();
+    if (result == null || result.files.single.path == null) return;
+
+    setState(() => _isUploading = true);
+    
+    try {
+      final fileInfo = await widget.api.uploadFile(result.files.single.path!);
+      if (fileInfo != null && fileInfo['url']!.isNotEmpty) {
+        final url = fileInfo['url']!;
+        final name = fileInfo['baseName']!;
+        // 将普通附件渲染为带名字的 Markdown 超链接形式
+        _insertMarkdown('\n[$name](', '$url)\n');
+      } else {
+         if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('上传未能获取到文件链接')));
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('附件上传失败，请检查设置')));
     } finally {
       if (mounted) setState(() => _isUploading = false);
     }
@@ -267,7 +291,6 @@ class _EditorPageState extends State<EditorPage> {
             ),
           ),
           
-          // [修改备注：全新引入的底部富文本 Markdown 编辑快捷栏，支持所有基础语法以及你的“付费阅读”等操作]
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             decoration: BoxDecoration(
@@ -278,10 +301,19 @@ class _EditorPageState extends State<EditorPage> {
               scrollDirection: Axis.horizontal,
               child: Row(
                 children: [
+                  // [修改备注：增加了独立的“附件上传”按钮，满足各种扩展名文件上传需求]
                   IconButton(
                     icon: _isUploading 
                         ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                        : const Icon(Icons.image_outlined),
+                        : const Icon(Icons.attach_file), // 回形针：代表附件
+                    onPressed: _isSubmitting || _isUploading ? null : _pickAndUploadAttachment,
+                    tooltip: '插入任意附件',
+                    color: Colors.grey.shade700,
+                  ),
+                  IconButton(
+                    icon: _isUploading 
+                        ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.image_outlined), // 图片：仅限照片
                     onPressed: _isSubmitting || _isUploading ? null : _pickAndUploadImage,
                     tooltip: '插入图片',
                     color: Colors.grey.shade700,
