@@ -19,7 +19,6 @@ class FlarumUser {
   final String? avatarUrl;
   final String money; 
   final String likesReceived;
-  final String badgesCount; // [核心修复：新增真实的勋章/等级数量解析]
   final List<FlarumGroup> groups;
 
   FlarumUser({
@@ -29,7 +28,6 @@ class FlarumUser {
     this.avatarUrl,
     this.money = '0',
     this.likesReceived = '0',
-    this.badgesCount = '0',
     this.groups = const [],
   });
 }
@@ -129,13 +127,11 @@ FlarumUser parseUser(Map<String, dynamic> json, String baseUrl) {
     displayName: attrs['displayName'] ?? attrs['username'] ?? 'Unknown',
     avatarUrl: avatar,
     money: attrs['money']?.toString() ?? '0',
-    likesReceived: attrs['likesReceived']?.toString() ?? '0',
-    // [核心修复：智能提取用户的徽章数量或等级数据，如果获取不到则默认 0]
-    badgesCount: attrs['badgesCount']?.toString() ??
-                 attrs['level']?.toString() ??
-                 (rels['userBadges']?['data'] as List?)?.length.toString() ??
-                 (rels['badges']?['data'] as List?)?.length.toString() ??
-                 '0',
+    // [核心修复：多维穿透取值！无论是声望、投票还是点赞，统统提取出来，防止遗漏那个“7”]
+    likesReceived: attrs['votes']?.toString() ?? 
+                   attrs['points']?.toString() ?? 
+                   attrs['likesReceived']?.toString() ?? 
+                   '0',
     groups: userGroups, 
   );
 }
@@ -197,12 +193,11 @@ DiscussionList parseDiscussionList(Map<String, dynamic> json, String baseUrl) {
         displayName: attrs['displayName'] ?? attrs['username'] ?? '',
         avatarUrl: avatar,
         money: attrs['money']?.toString() ?? '0',
-        likesReceived: attrs['likesReceived']?.toString() ?? '0',
-        badgesCount: attrs['badgesCount']?.toString() ??
-                     attrs['level']?.toString() ??
-                     (rels['userBadges']?['data'] as List?)?.length.toString() ??
-                     (rels['badges']?['data'] as List?)?.length.toString() ??
-                     '0',
+        // [核心修复：同步列表提取]
+        likesReceived: attrs['votes']?.toString() ?? 
+                       attrs['points']?.toString() ?? 
+                       attrs['likesReceived']?.toString() ?? 
+                       '0',
         groups: userGroups,
       );
     } else if (item['type'] == 'tags') {
@@ -256,7 +251,6 @@ DiscussionList parseDiscussionList(Map<String, dynamic> json, String baseUrl) {
 Widget buildUserBadges(List<FlarumGroup> groups) {
   if (groups.isEmpty) return const SizedBox.shrink();
   
-  // [核心修复：使用 Wrap 避免挤压溢出，完美支持纯文字标签（如：初级运维）的渲染！]
   return Wrap(
     spacing: 6,
     crossAxisAlignment: WrapCrossAlignment.center,
@@ -269,7 +263,6 @@ Widget buildUserBadges(List<FlarumGroup> groups) {
         bgColor = Color(int.tryParse(hex, radix: 16) ?? 0xFF9E9E9E);
       }
 
-      // 如果有 Icon，则显示圆形图标徽章
       final hasIcon = g.icon != null && g.icon!.trim().isNotEmpty;
 
       if (hasIcon) {
@@ -288,7 +281,6 @@ Widget buildUserBadges(List<FlarumGroup> groups) {
           child: Icon(iconData, size: 12, color: Colors.white),
         );
       } else {
-        // 如果没有 Icon，则完美复刻网页版：显示为带圆角的文字标签块
         return Container(
           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
           decoration: BoxDecoration(color: bgColor, borderRadius: BorderRadius.circular(4)),
