@@ -1,8 +1,9 @@
 // 文件位置: lib/pages/editor_page.dart
 
 import 'package:flutter/material.dart';
+import 'package:dio/dio.dart'; // 引入以支持网络错误深度解析
 import 'package:image_picker/image_picker.dart'; 
-import 'package:file_picker/file_picker.dart'; // [核心新增：文件选择库]
+import 'package:file_picker/file_picker.dart'; 
 import 'package:xsop_forum/api/api_client.dart';
 import 'package:xsop_forum/models/flarum_models.dart';
 
@@ -52,6 +53,18 @@ class _EditorPageState extends State<EditorPage> {
     }
   }
 
+  // [核心修复：如果用户选择的板块携带了发帖模板，自动帮其插入到内容编辑框中]
+  void _applyTagTemplate(FlarumTag tag) {
+    if (tag.template != null && tag.template!.isNotEmpty) {
+      final currentText = _contentController.text.trim();
+      if (currentText.isEmpty) {
+        _contentController.text = tag.template!;
+      } else if (!currentText.contains(tag.template!)) {
+        _contentController.text += '\n\n${tag.template!}';
+      }
+    }
+  }
+
   Future<void> _submit() async {
     final content = _contentController.text.trim();
     if (content.isEmpty) {
@@ -74,7 +87,7 @@ class _EditorPageState extends State<EditorPage> {
         return;
       }
       if (secondaryTags.isNotEmpty && _selectedSecondaryTags.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('发布失败：至少需要选择一个次级标签')));
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('发布失败：至少需要选择一个次标签')));
         return;
       }
     }
@@ -102,10 +115,26 @@ class _EditorPageState extends State<EditorPage> {
           Navigator.pop(context, true); 
         }
       }
+    } on DioException catch (e) {
+      // [核心修复：深度拦截权限不足，直接透传 Flarum 系统的中文报错原因]
+      String errMsg = '提交失败，请检查网络或权限';
+      if (e.response?.statusCode == 403) errMsg = '权限不足：您没有在当前板块发帖的权限';
+      if (e.response?.statusCode == 401) errMsg = '身份验证过期：请重新登录';
+      
+      try {
+        final errs = e.response?.data['errors'];
+        if (errs != null && errs is List && errs.isNotEmpty && errs[0]['detail'] != null) {
+          errMsg = errs[0]['detail'];
+        }
+      } catch (_) {}
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg)));
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('提交失败，请检查网络或账号权限')),
+          const SnackBar(content: Text('发生未知错误，请重试')),
         );
       }
     } finally {
@@ -129,14 +158,21 @@ class _EditorPageState extends State<EditorPage> {
       } else {
          if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('上传未能获取到链接')));
       }
-    } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('图片上传失败，请检查设置')));
+    } on DioException catch (e) {
+      String errMsg = '图片上传失败';
+      if (e.response?.statusCode == 403) errMsg = '权限不足：您无权上传图片';
+      try {
+        final errs = e.response?.data['errors'];
+        if (errs != null && errs is List && errs.isNotEmpty && errs[0]['detail'] != null) {
+          errMsg = errs[0]['detail'];
+        }
+      } catch (_) {}
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg)));
     } finally {
       if (mounted) setState(() => _isUploading = false);
     }
   }
 
-  // [核心新增：使用 FilePicker 让用户从手机存储中选择任意类型附件]
   Future<void> _pickAndUploadAttachment() async {
     final result = await FilePicker.platform.pickFiles();
     if (result == null || result.files.single.path == null) return;
@@ -148,13 +184,20 @@ class _EditorPageState extends State<EditorPage> {
       if (fileInfo != null && fileInfo['url']!.isNotEmpty) {
         final url = fileInfo['url']!;
         final name = fileInfo['baseName']!;
-        // 将普通附件渲染为带名字的 Markdown 超链接形式
         _insertMarkdown('\n[$name](', '$url)\n');
       } else {
          if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('上传未能获取到文件链接')));
       }
-    } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('附件上传失败，请检查设置')));
+    } on DioException catch (e) {
+      String errMsg = '附件上传失败';
+      if (e.response?.statusCode == 403) errMsg = '权限不足：当前等级无权上传附件';
+      try {
+        final errs = e.response?.data['errors'];
+        if (errs != null && errs is List && errs.isNotEmpty && errs[0]['detail'] != null) {
+          errMsg = errs[0]['detail'];
+        }
+      } catch (_) {}
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg)));
     } finally {
       if (mounted) setState(() => _isUploading = false);
     }
@@ -230,7 +273,10 @@ class _EditorPageState extends State<EditorPage> {
                           label: Text(tag.name),
                           selected: isSelected,
                           onSelected: (selected) {
-                            setState(() => _selectedPrimaryTag = selected ? tag : null);
+                            setState(() {
+                              _selectedPrimaryTag = selected ? tag : null;
+                              if (selected) _applyTagTemplate(tag);
+                            });
                           },
                         );
                       }).toList(),
@@ -261,6 +307,7 @@ class _EditorPageState extends State<EditorPage> {
                             setState(() {
                               if (selected) {
                                 _selectedSecondaryTags.add(tag);
+                                _applyTagTemplate(tag);
                               } else {
                                 _selectedSecondaryTags.removeWhere((t) => t.id == tag.id);
                               }
@@ -301,11 +348,10 @@ class _EditorPageState extends State<EditorPage> {
               scrollDirection: Axis.horizontal,
               child: Row(
                 children: [
-                  // [修改备注：增加了独立的“附件上传”按钮，满足各种扩展名文件上传需求]
                   IconButton(
                     icon: _isUploading 
                         ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                        : const Icon(Icons.attach_file), // 回形针：代表附件
+                        : const Icon(Icons.attach_file), 
                     onPressed: _isSubmitting || _isUploading ? null : _pickAndUploadAttachment,
                     tooltip: '插入任意附件',
                     color: Colors.grey.shade700,
@@ -313,7 +359,7 @@ class _EditorPageState extends State<EditorPage> {
                   IconButton(
                     icon: _isUploading 
                         ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                        : const Icon(Icons.image_outlined), // 图片：仅限照片
+                        : const Icon(Icons.image_outlined), 
                     onPressed: _isSubmitting || _isUploading ? null : _pickAndUploadImage,
                     tooltip: '插入图片',
                     color: Colors.grey.shade700,
