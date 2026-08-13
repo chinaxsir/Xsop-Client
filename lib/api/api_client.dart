@@ -67,30 +67,24 @@ class ApiClient {
     String? sort,
   }) async {
     final query = <String, dynamic>{
-      'page': {
-        'number': page,
-        'size': pageSize,
-      },
-      // [核心修复2：获取帖子列表时，一并把发帖人的徽章(groups)和标签树带上]
-      'include': 'user,user.groups,tags', 
+      'page[number]': page,
+      'page[size]': pageSize,
+      // [核心修复：移除了引发 400 报错的 user.groups 白名单外参数，恢复官方默认]
     };
     
-    final filter = <String, dynamic>{};
     List<String> searchQueries = [];
     
     if (tag != null && tag.isNotEmpty) {
-      filter['tag'] = tag.trim();
+      query['filter[tag]'] = tag.trim();
     }
     if (author != null && author.isNotEmpty) {
       searchQueries.add('author:${author.trim()}');
     }
     
     if (searchQueries.isNotEmpty) {
-      filter['q'] = searchQueries.join(' ');
+      query['filter[q]'] = searchQueries.join(' ');
     }
-    if (filter.isNotEmpty) {
-      query['filter'] = filter; 
-    }
+    
     if (sort != null) query['sort'] = sort;
 
     final response = await _dio.get('/api/discussions', queryParameters: query);
@@ -105,24 +99,25 @@ class ApiClient {
     final response = await _dio.get(
       '/api/discussions/$id',
       queryParameters: {
-        'page': {
-          'number': page,
-          'size': pageSize,
-        },
-        // [核心修复3：深入到回帖楼层，拉取每个回复者的徽章权限]
-        'include': 'user,user.groups,posts,posts.user,posts.user.groups',
+        'page[number]': page,
+        'page[size]': pageSize,
+        // [核心修复：同样恢复为官方标准的 include 白名单，防止详情页报错]
+        'include': 'user,posts,posts.user',
       },
     );
     return _asMap(response.data);
   }
 
   Future<Map<String, dynamic>> getTags() async {
-    final response = await _dio.get('/api/tags');
+    final response = await _dio.get(
+      '/api/tags', 
+      queryParameters: {'include': 'parent'}
+    );
     return _asMap(response.data);
   }
 
-  // [核心修复4：拉取指定用户信息时，强制附带徽章(groups)关联表，保证个人中心资产实时准确]
   Future<Map<String, dynamic>> getUser(int id) async {
+    // 个人信息接口是允许请求 groups 字段的，这里保留以支持资产和徽章显示
     final response = await _dio.get('/api/users/$id', queryParameters: {'include': 'groups'});
     return _asMap(response.data);
   }
@@ -213,7 +208,6 @@ class ApiClient {
   }
 
   Future<Map<String, dynamic>> getNotifications() async {
-    // 拉取通知时附带头像与权限
     final response = await _dio.get('/api/notifications', queryParameters: {'include': 'fromUser,fromUser.groups'});
     return _asMap(response.data);
   }
