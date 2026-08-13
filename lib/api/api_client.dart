@@ -69,7 +69,6 @@ class ApiClient {
     final query = <String, dynamic>{
       'page[number]': page,
       'page[size]': pageSize,
-      // [核心修复：移除了引发 400 报错的 user.groups 白名单外参数，恢复官方默认]
     };
     
     List<String> searchQueries = [];
@@ -101,7 +100,6 @@ class ApiClient {
       queryParameters: {
         'page[number]': page,
         'page[size]': pageSize,
-        // [核心修复：同样恢复为官方标准的 include 白名单，防止详情页报错]
         'include': 'user,posts,posts.user',
       },
     );
@@ -117,7 +115,6 @@ class ApiClient {
   }
 
   Future<Map<String, dynamic>> getUser(int id) async {
-    // 个人信息接口是允许请求 groups 字段的，这里保留以支持资产和徽章显示
     final response = await _dio.get('/api/users/$id', queryParameters: {'include': 'groups'});
     return _asMap(response.data);
   }
@@ -225,7 +222,8 @@ class ApiClient {
     });
   }
 
-  Future<String?> uploadImage(String filePath) async {
+  // [核心新增：统一的文件直传逻辑，同时返回 URL 和源文件名]
+  Future<Map<String, String>?> uploadFile(String filePath) async {
     final formData = FormData.fromMap({
       'files[]': await MultipartFile.fromFile(filePath),
     });
@@ -235,7 +233,13 @@ class ApiClient {
     
     final files = data['data'] as List<dynamic>?;
     if (files != null && files.isNotEmpty) {
-       return files.first['attributes']?['url'] as String?;
+       final attrs = files.first['attributes'] as Map<String, dynamic>?;
+       if (attrs != null) {
+         return {
+           'url': attrs['url']?.toString() ?? '',
+           'baseName': attrs['baseName']?.toString() ?? '文件',
+         };
+       }
     }
     return null;
   }
