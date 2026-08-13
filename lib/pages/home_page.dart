@@ -27,7 +27,6 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
-  
   final ScrollController _scrollController = ScrollController();
 
   final List<Discussion> _discussions = [];
@@ -59,9 +58,10 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _loadAllGlobalData() async {
     _loadForumInfo();
+    // 强制同步
     await _loadCurrentUser();
     await _loadTags();
-    _refresh();
+    _refresh(skipGlobalSync: true); // 避免重复同步
   }
 
   Future<void> _loadForumInfo() async {
@@ -94,17 +94,24 @@ class _HomePageState extends State<HomePage> {
         if (mounted) setState(() => _currentUser = null);
         return;
       }
+      // [核心：每次都会带回最新的金币、点赞、徽章状态]
       final res = await widget.api.getUser(userId);
       if (mounted) setState(() => _currentUser = parseUser(res, widget.baseUrl));
     } catch (_) {}
   }
 
-  Future<void> _refresh() async {
+  Future<void> _refresh({bool skipGlobalSync = false}) async {
     setState(() {
       _refreshing = true;
       _error = null;
     });
     try {
+      // [核心修复5：用户下拉刷新时，不仅刷新帖子，还隐式刷新权限和资产！实现实时同步]
+      if (!skipGlobalSync) {
+        await _loadTags();
+        await _loadCurrentUser();
+      }
+
       _page = 1;
       final res = await widget.api.getDiscussions(page: 1, tag: _selectedTagSlug);
       final list = parseDiscussionList(res, widget.baseUrl);
@@ -150,7 +157,6 @@ class _HomePageState extends State<HomePage> {
       }
     } catch (_) {
     } finally {
-      // [修改备注：彻底移除了导致编译报错的 _loadingMobile 笔误代码，只保留正确的变量]
       if (mounted) setState(() => _loadingMore = false);
     }
   }
@@ -242,9 +248,12 @@ class _HomePageState extends State<HomePage> {
             Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (context) => UserProfilePage(user: _currentUser!),
+                builder: (context) => UserProfilePage(user: _currentUser!, api: widget.api), // 传递 api 便于实时刷新
               ),
-            );
+            ).then((_) {
+               // 从个人中心返回后，静默刷新一次资产数据
+               _loadCurrentUser();
+            });
           } else {
             final loginSuccess = await Navigator.push(
               context,
@@ -423,7 +432,7 @@ class _HomePageState extends State<HomePage> {
                Navigator.push(
                  context,
                  MaterialPageRoute(
-                   builder: (context) => UserProfilePage(user: author),
+                   builder: (context) => UserProfilePage(user: author, api: widget.api),
                  ),
                );
              }
@@ -518,6 +527,11 @@ class DiscussionTile extends StatelessWidget {
                     const SizedBox(height: 10),
                     Row(
                       children: [
+                        // [修改备注：列表页发帖人名字后方追加真实的徽章渲染]
+                        if (author != null && author.groups.isNotEmpty) ...[
+                          buildUserBadges(author.groups),
+                          const SizedBox(width: 12),
+                        ],
                         Icon(Icons.chat_bubble_outline, size: 14, color: Colors.grey.shade400),
                         const SizedBox(width: 4),
                         Text('${discussion.commentCount}',
@@ -532,17 +546,6 @@ class DiscussionTile extends StatelessWidget {
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
-                        if (replyUser != null) ...[
-                          const SizedBox(width: 16),
-                          Flexible(
-                            child: Text(
-                              '@${replyUser.username}',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(color: Colors.grey.shade500, fontSize: 12),
-                            ),
-                          ),
-                        ],
                       ],
                     ),
                   ],
