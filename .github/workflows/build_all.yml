@@ -8,7 +8,7 @@ on:
       release_notes:
         description: '请输入本次版本的更新说明 (将自动展示在 Release 页面中)'
         required: false
-        default: '修复底层打包编译环境与图标映射问题'
+        default: '修复 Android 打包 KTS 文件后缀导致的报错中断'
 
 env:
   APP_NAME: XSOPForum
@@ -52,10 +52,16 @@ jobs:
           # 注入网络权限
           awk '/<manifest/{print;print "    <uses-permission android:name=\"android.permission.INTERNET\"/>";next}1' android/app/src/main/AndroidManifest.xml > tmp.xml && mv tmp.xml android/app/src/main/AndroidManifest.xml
 
-          # [核心修复 1：使用 build.gradle* 通配符并附加 || true，完美兼容 Groovy 和最新的 KTS 格式，秒杀 file_picker 编译报错]
-          sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/g' android/app/build.gradle* || true
-          sed -i 's/compileSdk flutter.compileSdkVersion/compileSdk 36/g' android/app/build.gradle* || true
-          sed -i 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 36/g' android/app/build.gradle* || true
+          # [终极修复：使用 if 判断精准命中文件，彻底避免文件不存在造成的打包中断]
+          if [ -f "android/app/build.gradle.kts" ]; then
+            echo "检测到新版 KTS 文件，正在注入 API 36 兼容..."
+            sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/g' android/app/build.gradle.kts
+          elif [ -f "android/app/build.gradle" ]; then
+            echo "检测到旧版 Gradle 文件，正在注入 API 36 兼容..."
+            sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/g' android/app/build.gradle
+            sed -i 's/compileSdk flutter.compileSdkVersion/compileSdk 36/g' android/app/build.gradle
+            sed -i 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 36/g' android/app/build.gradle
+          fi
           
           flutter pub get
           dart run flutter_launcher_icons
@@ -118,7 +124,7 @@ jobs:
 
       - name: Configure Info.plist securely
         run: |
-          # [核心修复 2：废弃暴力的 cat 覆盖，改用原生 plutil 工具精准注入，完美保留多任务后台图标映射]
+          # 使用 plutil 安全注入应用名称和相册权限，完美保留多任务后台图标
           PLIST="ios/Runner/Info.plist"
           plutil -replace CFBundleIdentifier -string "com.xsop.forum" "$PLIST"
           plutil -replace CFBundleDisplayName -string "XSOP" "$PLIST"
