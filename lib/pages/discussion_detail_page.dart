@@ -1,6 +1,7 @@
 // 文件位置: lib/pages/discussion_detail_page.dart
 
 import 'package:flutter/material.dart';
+import 'package:dio/dio.dart'; // 引入以支持网络错误深度解析
 import 'package:flutter_widget_from_html/flutter_widget_from_html.dart';
 
 import 'package:xsop_forum/api/api_client.dart';
@@ -47,7 +48,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
 
       for (var item in included) {
         if (item['type'] == 'users') {
-          // 直接利用强大的底层辅助函数提取用户完整的徽章对象
           users[item['id']] = parseUser({'data': item, 'included': included}, widget.api.baseUrl);
         } else if (item['type'] == 'posts' && item['attributes']?['contentType'] == 'comment') {
           postsList.add(item);
@@ -94,6 +94,22 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
 
     try {
       await widget.api.likePost(postId, !currentIsLiked);
+    } on DioException catch (e) {
+      if (mounted) {
+        setState(() {
+          _posts[index]['attributes']['isLiked'] = currentIsLiked;
+          _posts[index]['attributes']['likesCount'] = currentLikesCount;
+        });
+        String errMsg = '点赞失败';
+        if (e.response?.statusCode == 403) errMsg = '权限不足：您无权点赞';
+        try {
+          final errs = e.response?.data['errors'];
+          if (errs != null && errs is List && errs.isNotEmpty && errs[0]['detail'] != null) {
+            errMsg = errs[0]['detail'];
+          }
+        } catch (_) {}
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg)));
+      }
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -114,8 +130,18 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
         });
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('删除成功')));
       }
+    } on DioException catch (e) {
+      String errMsg = '删除失败';
+      if (e.response?.statusCode == 403) errMsg = '权限不足：您无权删除该帖';
+      try {
+        final errs = e.response?.data['errors'];
+        if (errs != null && errs is List && errs.isNotEmpty && errs[0]['detail'] != null) {
+          errMsg = errs[0]['detail'];
+        }
+      } catch (_) {}
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg)));
     } catch (_) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('删除失败，可能无权限')));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('删除失败，发生未知错误')));
     }
   }
 
@@ -176,9 +202,19 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                       if (mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('举报已提交，感谢您的反馈')));
                       }
+                    } on DioException catch (e) {
+                      String errMsg = '举报失败';
+                      if (e.response?.statusCode == 403) errMsg = '权限不足：您无权发起举报';
+                      try {
+                        final errs = e.response?.data['errors'];
+                        if (errs != null && errs is List && errs.isNotEmpty && errs[0]['detail'] != null) {
+                          errMsg = errs[0]['detail'];
+                        }
+                      } catch (_) {}
+                      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg)));
                     } catch (_) {
                       if (mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('提交失败')));
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('提交失败，发生网络错误')));
                       }
                     }
                   },
@@ -321,7 +357,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                         Row(
                           children: [
                             Text(username, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
-                            // [在楼层中实时还原网页版徽章展示]
                             if (user != null && user.groups.isNotEmpty)
                               buildUserBadges(user.groups),
                           ],
