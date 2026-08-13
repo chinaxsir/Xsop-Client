@@ -2,15 +2,49 @@
 
 import 'package:flutter/material.dart';
 import 'package:xsop_forum/models/flarum_models.dart';
+import 'package:xsop_forum/api/api_client.dart'; // 引入 API 支持主动刷新
 import 'package:xsop_forum/main.dart'; 
 
 import 'package:xsop_forum/pages/discussion_detail_page.dart'; 
 import 'package:xsop_forum/pages/home_page.dart' show formatRelativeTime; 
 
-class UserProfilePage extends StatelessWidget {
+class UserProfilePage extends StatefulWidget {
   final FlarumUser user;
+  final ApiClient api;
 
-  const UserProfilePage({super.key, required this.user});
+  const UserProfilePage({super.key, required this.user, required this.api});
+
+  @override
+  State<UserProfilePage> createState() => _UserProfilePageState();
+}
+
+class _UserProfilePageState extends State<UserProfilePage> {
+  late FlarumUser _currentUser;
+  bool _isRefreshing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentUser = widget.user;
+    // [核心修复：进入个人中心的一瞬间，静默向服务器请求最实时的该用户资产与徽章]
+    _syncLatestUserData();
+  }
+
+  Future<void> _syncLatestUserData() async {
+    setState(() => _isRefreshing = true);
+    try {
+      final res = await widget.api.getUser(int.parse(_currentUser.id));
+      if (mounted) {
+        setState(() {
+          _currentUser = parseUser(res, widget.api.baseUrl);
+        });
+      }
+    } catch (_) {
+      // 忽略网络失败，保留原本传递进来的缓存信息
+    } finally {
+      if (mounted) setState(() => _isRefreshing = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -31,53 +65,74 @@ class UserProfilePage extends StatelessWidget {
             color: Colors.white,
             child: Column(
               children: [
-                CircleAvatar(
-                  radius: 45,
-                  backgroundColor: Colors.grey.shade100,
-                  backgroundImage: user.avatarUrl != null
-                      ? NetworkImage(user.avatarUrl!)
-                      : null,
-                  child: user.avatarUrl == null
-                      ? Icon(Icons.person, size: 50, color: scheme.primary)
-                      : null,
+                Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    CircleAvatar(
+                      radius: 45,
+                      backgroundColor: Colors.grey.shade100,
+                      backgroundImage: _currentUser.avatarUrl != null
+                          ? NetworkImage(_currentUser.avatarUrl!)
+                          : null,
+                      child: _currentUser.avatarUrl == null
+                          ? Icon(Icons.person, size: 50, color: scheme.primary)
+                          : null,
+                    ),
+                    if (_isRefreshing)
+                      const Positioned(
+                        right: 0,
+                        bottom: 0,
+                        child: SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
+                      )
+                  ],
                 ),
                 const SizedBox(height: 16),
-                Text(
-                  user.displayName.isNotEmpty ? user.displayName : user.username,
-                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.bold,
-                      ),
+                
+                // [完全还原截图2设计：名字旁边跟随徽章]
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      _currentUser.displayName.isNotEmpty ? _currentUser.displayName : _currentUser.username,
+                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                            fontWeight: FontWeight.bold,
+                          ),
+                    ),
+                    if (_currentUser.groups.isNotEmpty)
+                      buildUserBadges(_currentUser.groups),
+                  ],
                 ),
+                
                 const SizedBox(height: 4),
                 Text(
-                  '@${user.username}',
+                  '@${_currentUser.username}',
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                         color: scheme.outline,
                       ),
                 ),
                 const SizedBox(height: 16),
                 
-                // [修改备注：根据网页版截图渲染深色底的金币资产栏]
+                // [完全还原截图2设计：资产悬浮框]
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                   decoration: BoxDecoration(
-                    color: const Color(0xFF3B3833), // 深色徽章背景
-                    borderRadius: BorderRadius.circular(20),
+                    color: const Color(0xFF6B7280), // 灰黑色徽章背景
+                    borderRadius: BorderRadius.circular(6),
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       const Icon(Icons.military_tech, size: 16, color: Colors.white),
                       const SizedBox(width: 4),
-                      Text('4', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)), // 这里预留了勋章占位
+                      Text('${_currentUser.groups.length}', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)), // 这里借用组的数量作为简单占位
                       const SizedBox(width: 12),
                       
                       const Icon(Icons.thumb_up, size: 14, color: Colors.amber),
                       const SizedBox(width: 4),
-                      Text(user.likesReceived, style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 13)),
+                      Text(_currentUser.likesReceived, style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 13)),
                       const SizedBox(width: 12),
                       
-                      Text('${user.money} XSD', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                      Text('${_currentUser.money} XSD', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
                     ],
                   ),
                 ),
@@ -94,7 +149,7 @@ class UserProfilePage extends StatelessWidget {
               Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (context) => UserDiscussionsPage(user: user),
+                  builder: (context) => UserDiscussionsPage(user: _currentUser),
                 ),
               );
             },
@@ -119,7 +174,6 @@ class UserProfilePage extends StatelessWidget {
     );
   }
 }
-
 
 class UserDiscussionsPage extends StatefulWidget {
   final FlarumUser user;
