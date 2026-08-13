@@ -8,12 +8,15 @@ on:
       release_notes:
         description: '请输入本次版本的更新说明 (将自动展示在 Release 页面中)'
         required: false
-        default: '新增通知中心与发帖图片上传功能'
+        default: '修复底层打包编译环境与图标映射问题'
 
 env:
   APP_NAME: XSOPForum
 
 jobs:
+  # ==========================================
+  # 任务 1：构建 Android APK
+  # ==========================================
   build-android:
     name: Build Android APK
     runs-on: ubuntu-latest
@@ -42,16 +45,17 @@ jobs:
       - name: Generate platforms and icons
         run: |
           rm -rf ios/ android/
-          flutter create . --platforms=android,ios --project-name=xsop_forum 2>&1
+          flutter create . --platforms=android,ios --org com.xsop --project-name xsop_forum 2>&1
           rm -rf lib/ pubspec.yaml assets/
           tar xf src_backup.tar
           
+          # 注入网络权限
           awk '/<manifest/{print;print "    <uses-permission android:name=\"android.permission.INTERNET\"/>";next}1' android/app/src/main/AndroidManifest.xml > tmp.xml && mv tmp.xml android/app/src/main/AndroidManifest.xml
 
-          # [核心修复：拦截生成的 Gradle 文件，将默认的 compileSdk 强制升级到 36，秒杀 file_picker 报错]
-          sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/g' android/app/build.gradle
-          sed -i 's/compileSdk flutter.compileSdkVersion/compileSdk 36/g' android/app/build.gradle
-          sed -i 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 36/g' android/app/build.gradle
+          # [核心修复 1：使用 build.gradle* 通配符并附加 || true，完美兼容 Groovy 和最新的 KTS 格式，秒杀 file_picker 编译报错]
+          sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/g' android/app/build.gradle* || true
+          sed -i 's/compileSdk flutter.compileSdkVersion/compileSdk 36/g' android/app/build.gradle* || true
+          sed -i 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 36/g' android/app/build.gradle* || true
           
           flutter pub get
           dart run flutter_launcher_icons
@@ -81,6 +85,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # ==========================================
+  # 任务 2：构建 iOS 巨魔 IPA
+  # ==========================================
   build-ios:
     name: Build iOS IPA
     runs-on: macos-latest
@@ -103,74 +110,20 @@ jobs:
       - name: Generate iOS and icons
         run: |
           rm -rf ios/ android/
-          flutter create . --platforms=ios,android --project-name=xsop_forum 2>&1
+          flutter create . --platforms=ios,android --org com.xsop --project-name xsop_forum 2>&1
           rm -rf lib/ pubspec.yaml assets/
           tar xf src_backup.tar
           flutter pub get
           dart run flutter_launcher_icons
 
-      - name: Write Info.plist
+      - name: Configure Info.plist securely
         run: |
-          cat > ios/Runner/Info.plist <<'PLIST'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-              <key>CFBundleDevelopmentRegion</key>
-              <string>zh_CN</string>
-              <key>CFBundleDisplayName</key>
-              <string>XSOP</string>
-              <key>CFBundleExecutable</key>
-              <string>$(EXECUTABLE_NAME)</string>
-              <key>CFBundleIdentifier</key>
-              <string>com.xsop.forum</string>
-              <key>CFBundleInfoDictionaryVersion</key>
-              <string>6.0</string>
-              <key>CFBundleName</key>
-              <string>$(PRODUCT_NAME)</string>
-              <key>CFBundlePackageType</key>
-              <string>APPL</string>
-              <key>CFBundleShortVersionString</key>
-              <string>$(FLUTTER_BUILD_NAME)</string>
-              <key>CFBundleVersion</key>
-              <string>$(FLUTTER_BUILD_NUMBER)</string>
-              <key>CFBundleIconName</key>
-              <string>AppIcon</string>
-              <key>CFBundleIcons</key>
-              <dict>
-                  <key>CFBundlePrimaryIcon</key>
-                  <dict>
-                      <key>CFBundleIconFiles</key>
-                      <array>
-                          <string>AppIcon</string>
-                      </array>
-                  </dict>
-              </dict>
-              <key>LSRequiresIPhoneOS</key>
-              <true/>
-              
-              <!-- [修改备注：关键安全配置！注入相册访问权限声明，防止选图闪退] -->
-              <key>NSPhotoLibraryUsageDescription</key>
-              <string>我们需要访问您的相册，以便您在发帖或回复时能够上传图片。</string>
-              
-              <key>UILaunchStoryboardName</key>
-              <string>LaunchScreen</string>
-              <key>UIMainStoryboardFile</key>
-              <string>Main</string>
-              <key>CADisableMinimumFrameDurationOnPhone</key>
-              <true/>
-              <key>UIApplicationSupportsIndirectInputEvents</key>
-              <true/>
-              <key>IPHONEOS_DEPLOYMENT_TARGET</key>
-              <string>15.0</string>
-              <key>NSAppTransportSecurity</key>
-              <dict>
-                  <key>NSAllowsArbitraryLoads</key>
-                  <true/>
-              </dict>
-          </dict>
-          </plist>
-          PLIST
+          # [核心修复 2：废弃暴力的 cat 覆盖，改用原生 plutil 工具精准注入，完美保留多任务后台图标映射]
+          PLIST="ios/Runner/Info.plist"
+          plutil -replace CFBundleIdentifier -string "com.xsop.forum" "$PLIST"
+          plutil -replace CFBundleDisplayName -string "XSOP" "$PLIST"
+          plutil -replace CFBundleName -string "XSOP" "$PLIST"
+          plutil -insert NSPhotoLibraryUsageDescription -string "我们需要访问您的相册，以便您在发帖或回复时能够上传图片。" "$PLIST"
 
       - name: Configure Xcode project (No Sign)
         run: |
