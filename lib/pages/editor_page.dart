@@ -30,7 +30,6 @@ class _EditorPageState extends State<EditorPage> {
   bool _isSubmitting = false;
   bool _isUploading = false; 
   
-  // [核心增强：动态标签获取状态]
   List<FlarumTag> _tags = [];
   bool _isLoadingTags = false;
   
@@ -42,7 +41,6 @@ class _EditorPageState extends State<EditorPage> {
   @override
   void initState() {
     super.initState();
-    // [核心修复：如果外部没有传入标签，或者被独立唤起发帖，强制联网拉取最新标签树，杜绝绕过选择]
     if (widget.availableTags != null && widget.availableTags!.isNotEmpty) {
       _tags = widget.availableTags!;
     } else if (_isNewPost) {
@@ -111,7 +109,6 @@ class _EditorPageState extends State<EditorPage> {
         return;
       }
       
-      // [核心严格校验：通过全局 _tags 计算要求]
       final allowedTags = _tags.where((t) => t.canStartDiscussion).toList();
       final secondaryTags = allowedTags.where((t) => !t.isPrimary).toList();
       
@@ -176,7 +173,6 @@ class _EditorPageState extends State<EditorPage> {
     setState(() => _isUploading = true);
     
     try {
-      // 传递确切的文件名，供服务器精确判定扩展名
       final fileName = pickedFile.name;
       final fileInfo = await widget.api.uploadFile(pickedFile.path, filename: fileName);
       if (fileInfo != null && fileInfo['url']!.isNotEmpty) {
@@ -185,7 +181,6 @@ class _EditorPageState extends State<EditorPage> {
          if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('上传未能获取到链接')));
       }
     } on DioException catch (e) {
-      // [深度拦截上传错误]
       String errMsg = '图片上传失败';
       if (e.response?.statusCode == 403) errMsg = '权限不足：当前等级无权上传图片';
       else if (e.response?.statusCode == 413) errMsg = '文件过大：服务器拒绝接收（超过上传限制）';
@@ -214,7 +209,6 @@ class _EditorPageState extends State<EditorPage> {
     try {
       final filePath = result.files.single.path!;
       final fileName = result.files.single.name;
-      // [精确传递原始文件名]
       final fileInfo = await widget.api.uploadFile(filePath, filename: fileName);
       
       if (fileInfo != null && fileInfo['url']!.isNotEmpty) {
@@ -225,7 +219,6 @@ class _EditorPageState extends State<EditorPage> {
          if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('上传未能获取到文件链接')));
       }
     } on DioException catch (e) {
-      // [深度拦截附件上传错误]
       String errMsg = '附件上传失败';
       if (e.response?.statusCode == 403) errMsg = '权限不足：当前等级无权上传此后缀附件';
       else if (e.response?.statusCode == 413) errMsg = '文件过大：超过服务器单文件上传体积上限';
@@ -254,7 +247,6 @@ class _EditorPageState extends State<EditorPage> {
 
   @override
   Widget build(BuildContext context) {
-    // [依据动态刷新的标签数据进行分类]
     final allowedTags = _tags.where((t) => t.canStartDiscussion).toList();
     final primaryTags = allowedTags.where((t) => t.isPrimary).toList();
     final secondaryTags = allowedTags.where((t) => !t.isPrimary).toList();
@@ -273,7 +265,6 @@ class _EditorPageState extends State<EditorPage> {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             child: FilledButton(
-              // [加载标签时，自动锁定发送按钮]
               onPressed: _isSubmitting || _isUploading || _isLoadingTags ? null : _submit,
               child: _isSubmitting || _isLoadingTags
                   ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
@@ -298,7 +289,6 @@ class _EditorPageState extends State<EditorPage> {
             ),
             const Divider(height: 1, thickness: 0.5, color: Color(0xFFE5E5EA)),
             
-            // [如果标签还在联网获取中，则展示骨架屏动画]
             if (_isLoadingTags)
               const Padding(
                 padding: EdgeInsets.all(32.0),
@@ -415,13 +405,21 @@ class _EditorPageState extends State<EditorPage> {
                     tooltip: '插入图片',
                     color: Colors.grey.shade700,
                   ),
+                  // [核心修复：全面补齐网页端发帖功能栏]
+                  _buildToolbarBtn(Icons.title, () => _insertMarkdown('### ', ''), '标题'),
                   _buildToolbarBtn(Icons.format_bold, () => _insertMarkdown('**', '**'), '加粗'),
                   _buildToolbarBtn(Icons.format_italic, () => _insertMarkdown('*', '*'), '斜体'),
+                  _buildToolbarBtn(Icons.format_strikethrough, () => _insertMarkdown('~~', '~~'), '删除线'),
                   _buildToolbarBtn(Icons.format_quote, () => _insertMarkdown('\n> ', '\n'), '引用'),
+                  _buildToolbarBtn(Icons.warning_amber_outlined, () => _insertMarkdown('>! ', ' !<'), '防透剧(折叠)'),
                   _buildToolbarBtn(Icons.code, () => _insertMarkdown('\n```\n', '\n```\n'), '代码块'),
                   _buildToolbarBtn(Icons.link, () => _insertMarkdown('[', '](https://)'), '插入链接'),
+                  
                   _buildToolbarBtn(Icons.format_list_bulleted, () => _insertMarkdown('\n- ', ''), '无序列表'),
+                  _buildToolbarBtn(Icons.format_list_numbered, () => _insertMarkdown('\n1. ', ''), '有序列表'),
                   _buildToolbarBtn(Icons.monetization_on_outlined, () => _insertMarkdown('[charge=10]', '[/charge]'), '插入付费阅读'),
+                  _buildToolbarBtn(Icons.alternate_email, () => _insertMarkdown('@', ''), '提及(@)用户'),
+                  _buildToolbarBtn(Icons.emoji_emotions_outlined, () => _insertMarkdown('😀', ''), '插入表情'),
                 ],
               ),
             ),
