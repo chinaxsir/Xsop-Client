@@ -1,7 +1,7 @@
 // 文件位置: lib/models/flarum_models.dart
 
 import 'package:flutter/material.dart';
-import 'package:font_awesome_flutter/font_awesome_flutter.dart'; // 引入原汁原味的图标库
+import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
 class FlarumGroup {
   final String id;
@@ -128,7 +128,6 @@ FlarumUser parseUser(Map<String, dynamic> json, String baseUrl) {
     displayName: attrs['displayName'] ?? attrs['username'] ?? 'Unknown',
     avatarUrl: avatar,
     money: attrs['money']?.toString() ?? '0',
-    // [核心修复：多维穿透取值！涵盖市面上所有 Flarum 点赞/声望插件的字段，确保 100% 抓取到那个 "7"]
     likesReceived: attrs['likesReceived']?.toString() ?? 
                    attrs['likes_received']?.toString() ??
                    attrs['votes']?.toString() ?? 
@@ -254,16 +253,16 @@ DiscussionList parseDiscussionList(Map<String, dynamic> json, String baseUrl) {
   return DiscussionList(items, hasMore);
 }
 
-// [核心重构：Flarum 字符串到真实 FontAwesome 库的精准映射]
-IconData getFontAwesomeIcon(String? iconClass) {
+// [核心修复3：直接将返回类型变为 dynamic，不论底层类名如何变更都不会引发编译异常]
+dynamic getFontAwesomeIcon(String? iconClass) {
   if (iconClass == null || iconClass.isEmpty) return FontAwesomeIcons.certificate;
   final lower = iconClass.toLowerCase();
-  if (lower.contains('crown')) return FontAwesomeIcons.crown; // 真正的皇冠 👑
-  if (lower.contains('wrench')) return FontAwesomeIcons.wrench; // 真正的扳手 🔧
+  if (lower.contains('crown')) return FontAwesomeIcons.crown; 
+  if (lower.contains('wrench')) return FontAwesomeIcons.wrench; 
   if (lower.contains('shield')) return FontAwesomeIcons.shieldHalved;
   if (lower.contains('star')) return FontAwesomeIcons.solidStar;
   if (lower.contains('bolt')) return FontAwesomeIcons.bolt;
-  if (lower.contains('medal')) return FontAwesomeIcons.medal; // 真正的奖牌 🏅
+  if (lower.contains('medal')) return FontAwesomeIcons.medal; 
   if (lower.contains('award')) return FontAwesomeIcons.award;
   if (lower.contains('thumbs-up') || lower.contains('thumbsup')) return FontAwesomeIcons.solidThumbsUp;
   if (lower.contains('gem')) return FontAwesomeIcons.gem;
@@ -294,7 +293,6 @@ Widget buildUserBadges(List<FlarumGroup> groups) {
           height: 20,
           decoration: BoxDecoration(color: bgColor, shape: BoxShape.circle),
           child: Center(
-            // [替换为纯正的 FontAwesome 渲染，和网页 100% 一模一样]
             child: FaIcon(getFontAwesomeIcon(g.icon), size: 10, color: Colors.white),
           ),
         );
