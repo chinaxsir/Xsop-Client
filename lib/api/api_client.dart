@@ -173,20 +173,60 @@ class ApiClient {
     return _asMap(response.data);
   }
 
+  // ==========================================
+  // [核心重构：全面接入扩展帖子操作 API]
+  // ==========================================
+
+  // 1. 删除帖子
   Future<void> deletePost(int postId) async {
     await _dio.delete('/api/posts/$postId');
   }
 
-  Future<void> likePost(int postId, bool isLiked) async {
+  // 2. 编辑帖子
+  Future<void> editPost(int postId, String content) async {
     await _dio.patch('/api/posts/$postId', data: {
       "data": {
         "type": "posts",
         "id": postId.toString(),
-        "attributes": {"isLiked": isLiked}
+        "attributes": {"content": content}
       }
     });
   }
 
+  // 3. 对用户发出警告 (支持 Flarum Warnings 扩展)
+  Future<void> warnUser(int userId, int? postId, String reason) async {
+    final Map<String, dynamic> data = {
+      "data": {
+        "type": "warnings",
+        "attributes": {
+          "strikes": 1,
+          "publicComment": reason,
+        },
+        "relationships": {
+          "user": {
+            "data": {"type": "users", "id": userId.toString()}
+          }
+        }
+      }
+    };
+    if (postId != null) {
+      data["data"]["relationships"]["post"] = {
+        "data": {"type": "posts", "id": postId.toString()}
+      };
+    }
+    await _dio.post('/api/warnings', data: data);
+  }
+
+  // 4. 打赏帖子 (兼容主流 Money/Tip 接口结构)
+  Future<void> tipPost(int postId, int amount) async {
+    await _dio.post('/api/posts/$postId/tip', data: {
+      "data": {
+        "attributes": {"amount": amount}
+      }
+    });
+  }
+
+  // 5. 举报/标记
   Future<void> reportPost(int postId, String reason, String? detail) async {
     await _dio.post('/api/flags', data: {
       "data": {
@@ -200,6 +240,18 @@ class ApiClient {
             "data": {"type": "posts", "id": postId.toString()}
           }
         }
+      }
+    });
+  }
+
+  // ==========================================
+
+  Future<void> likePost(int postId, bool isLiked) async {
+    await _dio.patch('/api/posts/$postId', data: {
+      "data": {
+        "type": "posts",
+        "id": postId.toString(),
+        "attributes": {"isLiked": isLiked}
       }
     });
   }
@@ -222,18 +274,13 @@ class ApiClient {
     });
   }
 
-  // [核心修复：支持显式传入 filename 参数，打破文件类型识别壁垒]
   Future<Map<String, String>?> uploadFile(String filePath, {String? filename}) async {
-    // 提取兜底文件名，确保后缀存在
     String name = filename ?? filePath.split('/').last;
-    
     final formData = FormData.fromMap({
       'files[]': await MultipartFile.fromFile(filePath, filename: name),
     });
-    
     final response = await _dio.post('/api/fof/upload', data: formData);
     final data = _asMap(response.data);
-    
     final files = data['data'] as List<dynamic>?;
     if (files != null && files.isNotEmpty) {
        final attrs = files.first['attributes'] as Map<String, dynamic>?;
