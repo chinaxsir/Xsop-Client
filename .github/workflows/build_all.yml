@@ -10,12 +10,7 @@ on:
 
 jobs:
   call-private-build:
-    # 核心 1：将 chinaxsir/Xsop-Workflows 替换为你真实的私有仓库名
-   uses: chinaxsir/Xsop-Client-Workflows/.github/workflows/Client_build.yml@main
-    
-    # 核心 2：把手动触发时输入的文字，传递给私有工作流
+    uses: chinaxsir/Xsop-Client-Workflows/.github/workflows/Client_build.yml@main
     with:
       release_notes: ${{ github.event.inputs.release_notes }}
-      
-    # 核心 3：继承 secrets，因为私有仓库需要用 GITHUB_TOKEN 发 Release
     secrets: inherit
