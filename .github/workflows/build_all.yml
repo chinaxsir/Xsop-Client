@@ -8,7 +8,7 @@ on:
       release_notes:
         description: '请输入本次版本的更新说明 (将自动展示在 Release 页面中)'
         required: false
-        default: '修复 Android 打包 KTS 文件后缀导致的报错中断'
+        default: '修复底层插件之间 API 版本冲突引发的打包失败'
 
 env:
   APP_NAME: XSOPForum
@@ -52,19 +52,24 @@ jobs:
           # 注入网络权限
           awk '/<manifest/{print;print "    <uses-permission android:name=\"android.permission.INTERNET\"/>";next}1' android/app/src/main/AndroidManifest.xml > tmp.xml && mv tmp.xml android/app/src/main/AndroidManifest.xml
 
-          # [终极修复：使用 if 判断精准命中文件，彻底避免文件不存在造成的打包中断]
+          # APP 层级：强制升级当前工程 API 为 36
           if [ -f "android/app/build.gradle.kts" ]; then
-            echo "检测到新版 KTS 文件，正在注入 API 36 兼容..."
             sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/g' android/app/build.gradle.kts
           elif [ -f "android/app/build.gradle" ]; then
-            echo "检测到旧版 Gradle 文件，正在注入 API 36 兼容..."
             sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/g' android/app/build.gradle
             sed -i 's/compileSdk flutter.compileSdkVersion/compileSdk 36/g' android/app/build.gradle
             sed -i 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 36/g' android/app/build.gradle
           fi
           
+          # 拉取依赖包
           flutter pub get
           dart run flutter_launcher_icons
+
+          # [终极杀招：插件层降维修补]
+          # 在云端服务器强行搜索刚下载好的第三方包，暴力替换其底层硬编码的 34 为 36
+          echo "Patching pub-cache plugins to compileSdk 36..."
+          find /opt/hostedtoolcache/flutter "$HOME/.pub-cache" -type f -name "build.gradle" 2>/dev/null -exec sed -i 's/compileSdk 34/compileSdk 36/g' {} + || true
+          find /opt/hostedtoolcache/flutter "$HOME/.pub-cache" -type f -name "build.gradle" 2>/dev/null -exec sed -i 's/compileSdkVersion 34/compileSdkVersion 36/g' {} + || true
 
       - name: Build APK
         run: flutter build apk --release --dart-define=BASE_URL=https://xsop.de
