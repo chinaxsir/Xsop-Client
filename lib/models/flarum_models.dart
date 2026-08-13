@@ -20,6 +20,7 @@ class FlarumUser {
   final String? avatarUrl;
   final String money; 
   final String likesReceived;
+  final String badgesCount; 
   final List<FlarumGroup> groups;
 
   FlarumUser({
@@ -29,6 +30,7 @@ class FlarumUser {
     this.avatarUrl,
     this.money = '0',
     this.likesReceived = '0',
+    this.badgesCount = '0',
     this.groups = const [],
   });
 }
@@ -42,6 +44,7 @@ class FlarumTag {
   final bool isPrimary; 
   final int? position; 
   final bool canStartDiscussion;
+  final String? template; // [核心修复：新增模板字段支撑发帖模板功能]
 
   FlarumTag({
     required this.id,
@@ -52,6 +55,7 @@ class FlarumTag {
     this.isPrimary = false,
     this.position,
     this.canStartDiscussion = true,
+    this.template,
   });
 }
 
@@ -136,6 +140,11 @@ FlarumUser parseUser(Map<String, dynamic> json, String baseUrl) {
                    attrs['likes']?.toString() ?? 
                    attrs['reputation']?.toString() ?? 
                    '0',
+    badgesCount: attrs['badgesCount']?.toString() ??
+                 attrs['level']?.toString() ??
+                 (rels['userBadges']?['data'] as List?)?.length.toString() ??
+                 (rels['badges']?['data'] as List?)?.length.toString() ??
+                 '0',
     groups: userGroups, 
   );
 }
@@ -162,6 +171,8 @@ List<FlarumTag> parseTags(Map<String, dynamic> json) {
       isPrimary: isPrimary,
       position: pos is int ? pos : int.tryParse(pos?.toString() ?? ''),
       canStartDiscussion: attrs['canStartDiscussion'] ?? true,
+      // [核心修复：深度嗅探解析插件携带的模板字段]
+      template: attrs['discussionTemplate']?.toString() ?? attrs['template']?.toString(),
     );
   }).toList();
 }
@@ -203,6 +214,11 @@ DiscussionList parseDiscussionList(Map<String, dynamic> json, String baseUrl) {
                        attrs['points']?.toString() ?? 
                        attrs['likesCount']?.toString() ?? 
                        '0',
+        badgesCount: attrs['badgesCount']?.toString() ??
+                     attrs['level']?.toString() ??
+                     (rels['userBadges']?['data'] as List?)?.length.toString() ??
+                     (rels['badges']?['data'] as List?)?.length.toString() ??
+                     '0',
         groups: userGroups,
       );
     } else if (item['type'] == 'tags') {
@@ -253,7 +269,6 @@ DiscussionList parseDiscussionList(Map<String, dynamic> json, String baseUrl) {
   return DiscussionList(items, hasMore);
 }
 
-// [核心修复3：直接将返回类型变为 dynamic，不论底层类名如何变更都不会引发编译异常]
 dynamic getFontAwesomeIcon(String? iconClass) {
   if (iconClass == null || iconClass.isEmpty) return FontAwesomeIcons.certificate;
   final lower = iconClass.toLowerCase();
