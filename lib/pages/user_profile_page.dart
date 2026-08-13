@@ -1,6 +1,7 @@
 // 文件位置: lib/pages/user_profile_page.dart
 
 import 'package:flutter/material.dart';
+import 'package:font_awesome_flutter/font_awesome_flutter.dart'; // 引入网页同源图标库
 import 'package:xsop_forum/models/flarum_models.dart';
 import 'package:xsop_forum/api/api_client.dart'; 
 import 'package:xsop_forum/main.dart'; 
@@ -97,6 +98,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
                     ),
                     if (_currentUser.groups.isNotEmpty) ...[
                       const SizedBox(width: 8),
+                      // 这里的群组徽章会自动渲染为你网页版一模一样的真实皇冠和扳手！
                       buildUserBadges(_currentUser.groups),
                     ]
                   ],
@@ -111,7 +113,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
                 ),
                 const SizedBox(height: 16),
                 
-                // [核心修复：完美对齐网页截图，展示 `徽章 - 7 - 大拇指 - 金币`]
+                // [极度还原网页：使用 FontAwesome 的真实奖牌和点赞图标]
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                   decoration: BoxDecoration(
@@ -121,13 +123,14 @@ class _UserProfilePageState extends State<UserProfilePage> {
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Icon(Icons.military_tech, size: 16, color: Colors.white),
-                      const SizedBox(width: 4),
+                      const FaIcon(FontAwesomeIcons.medal, size: 14, color: Colors.white),
+                      const SizedBox(width: 6),
                       Text(_currentUser.likesReceived, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
-                      const SizedBox(width: 4),
-                      const Icon(Icons.thumb_up, size: 14, color: Colors.amber),
                       
                       const SizedBox(width: 16),
+                      
+                      const FaIcon(FontAwesomeIcons.solidThumbsUp, size: 13, color: Colors.amber),
+                      const SizedBox(width: 6),
                       Text('${_currentUser.money} XSD', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
                     ],
                   ),
