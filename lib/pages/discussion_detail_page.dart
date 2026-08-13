@@ -1,7 +1,7 @@
 // 文件位置: lib/pages/discussion_detail_page.dart
 
 import 'package:flutter/material.dart';
-import 'package:dio/dio.dart'; // 引入以支持网络错误深度解析
+import 'package:dio/dio.dart'; 
 import 'package:flutter_widget_from_html/flutter_widget_from_html.dart';
 
 import 'package:xsop_forum/api/api_client.dart';
@@ -72,6 +72,250 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
       });
     }
   }
+
+  // ==========================================
+  // [核心增强：帖子菜单选项 1-1 全面深度集成]
+  // ==========================================
+
+  // 1. 编辑功能弹窗
+  Future<void> _showEditDialog(int postId, int index) async {
+    final post = _posts[index];
+    // 解析 Flarum 原生 Markdown 格式
+    final initialContent = post['attributes']?['content'] as String? ?? '';
+    final editController = TextEditingController(text: initialContent);
+
+    await showDialog(
+      context: context,
+      builder: (context) {
+        bool isSubmitting = false;
+        return StatefulBuilder(
+          builder: (context, setStateDialog) {
+            return AlertDialog(
+              backgroundColor: Colors.white,
+              surfaceTintColor: Colors.transparent,
+              title: const Text('编辑回复', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              content: SingleChildScrollView(
+                child: TextField(
+                  controller: editController,
+                  maxLines: null,
+                  minLines: 4,
+                  decoration: const InputDecoration(
+                    hintText: '修改内容（支持 Markdown）',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消', style: TextStyle(color: Colors.grey))),
+                FilledButton(
+                  onPressed: isSubmitting ? null : () async {
+                    if (editController.text.trim().isEmpty) return;
+                    setStateDialog(() => isSubmitting = true);
+                    try {
+                      await widget.api.editPost(postId, editController.text.trim());
+                      if (mounted) {
+                        Navigator.pop(context);
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('编辑成功')));
+                        setState(() => _isLoading = true);
+                        _loadDiscussionDetail(); // 重新拉取展示最新内容
+                      }
+                    } on DioException catch (e) {
+                       String errMsg = '编辑失败';
+                       if (e.response?.statusCode == 403) errMsg = '权限不足：超时或无权编辑';
+                       try {
+                         final errs = e.response?.data['errors'];
+                         if (errs != null && errs is List && errs.isNotEmpty && errs[0]['detail'] != null) {
+                           errMsg = errs[0]['detail'];
+                         }
+                       } catch (_) {}
+                       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg)));
+                    } finally {
+                      if (mounted) setStateDialog(() => isSubmitting = false);
+                    }
+                  },
+                  child: isSubmitting ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('保存修改'),
+                ),
+              ],
+            );
+          }
+        );
+      }
+    );
+  }
+
+  // 2. 打赏弹窗
+  Future<void> _showTipDialog(int postId) async {
+    final amountController = TextEditingController();
+
+    await showDialog(
+      context: context,
+      builder: (context) {
+        bool isSubmitting = false;
+        return StatefulBuilder(
+          builder: (context, setStateDialog) {
+            return AlertDialog(
+              backgroundColor: Colors.white,
+              surfaceTintColor: Colors.transparent,
+              title: const Row(children: [Icon(Icons.card_giftcard, color: Colors.orange), SizedBox(width: 8), Text('打赏作者')]),
+              content: TextField(
+                controller: amountController,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  hintText: '请输入打赏金额 (XSD)',
+                  border: OutlineInputBorder(),
+                  suffixText: 'XSD',
+                ),
+              ),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消', style: TextStyle(color: Colors.grey))),
+                FilledButton(
+                  style: FilledButton.styleFrom(backgroundColor: Colors.orange),
+                  onPressed: isSubmitting ? null : () async {
+                    final amount = int.tryParse(amountController.text.trim());
+                    if (amount == null || amount <= 0) {
+                       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请输入有效金额')));
+                       return;
+                    }
+                    setStateDialog(() => isSubmitting = true);
+                    try {
+                      await widget.api.tipPost(postId, amount);
+                      if (mounted) {
+                        Navigator.pop(context);
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('打赏成功，感谢支持！')));
+                      }
+                    } on DioException catch (e) {
+                      if (mounted) {
+                         String errMsg = '打赏失败，请检查余额';
+                         if (e.response?.statusCode == 404) errMsg = '接口不兼容：网页端打赏插件暂未开放 API 支持';
+                         try {
+                           final errs = e.response?.data['errors'];
+                           if (errs != null && errs is List && errs.isNotEmpty && errs[0]['detail'] != null) {
+                             errMsg = errs[0]['detail'];
+                           }
+                         } catch (_) {}
+                         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg)));
+                         Navigator.pop(context); 
+                      }
+                    }
+                  },
+                  child: isSubmitting ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('确认打赏'),
+                ),
+              ],
+            );
+          }
+        );
+      }
+    );
+  }
+
+  // 3. 投票详情
+  void _showVoteDetails(int index) {
+    final post = _posts[index];
+    final attrs = post['attributes'] ?? {};
+    
+    // Flarum 各大投票/点赞插件通用的点赞字段抓取
+    final upvotes = attrs['upvotes'] ?? attrs['likesCount'] ?? attrs['points'] ?? attrs['votes'] ?? 0;
+    final downvotes = attrs['downvotes'] ?? 0;
+    
+    showDialog(
+      context: context,
+      builder: (context) {
+         return AlertDialog(
+           backgroundColor: Colors.white,
+           surfaceTintColor: Colors.transparent,
+           title: const Text('投票 / 互动详情'),
+           content: Column(
+             mainAxisSize: MainAxisSize.min,
+             children: [
+               ListTile(
+                 leading: const Icon(Icons.thumb_up, color: Colors.green),
+                 title: const Text('支持 / 获赞数'),
+                 trailing: Text('$upvotes', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Colors.green)),
+               ),
+               if (downvotes > 0)
+                 ListTile(
+                   leading: const Icon(Icons.thumb_down, color: Colors.red),
+                   title: const Text('反对 / 踩'),
+                   trailing: Text('$downvotes', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Colors.red)),
+                 ),
+               const SizedBox(height: 16),
+               const Text('具体参与用户列表需前往网页端查看。', style: TextStyle(color: Colors.grey, fontSize: 12)),
+             ]
+           ),
+           actions: [
+             TextButton(onPressed: () => Navigator.pop(context), child: const Text('关闭'))
+           ]
+         );
+      }
+    );
+  }
+
+  // 4. 警告用户
+  Future<void> _showWarnDialog(int postId, String? userIdStr) async {
+    if (userIdStr == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('无法获取用户信息，警告失败')));
+      return;
+    }
+    final userId = int.parse(userIdStr);
+    final warnController = TextEditingController();
+
+    await showDialog(
+      context: context,
+      builder: (context) {
+        bool isSubmitting = false;
+        return StatefulBuilder(
+          builder: (context, setStateDialog) {
+            return AlertDialog(
+              backgroundColor: Colors.white,
+              surfaceTintColor: Colors.transparent,
+              title: const Row(children: [Icon(Icons.warning_amber, color: Colors.redAccent), SizedBox(width: 8), Text('下发违规警告')]),
+              content: TextField(
+                controller: warnController,
+                maxLines: 3,
+                decoration: const InputDecoration(
+                  hintText: '请输入警告原因（该记录可能被公开展示）',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消', style: TextStyle(color: Colors.grey))),
+                FilledButton(
+                  style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+                  onPressed: isSubmitting ? null : () async {
+                    if (warnController.text.trim().isEmpty) return;
+                    setStateDialog(() => isSubmitting = true);
+                    try {
+                      await widget.api.warnUser(userId, postId, warnController.text.trim());
+                      if (mounted) {
+                        Navigator.pop(context);
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('警告下发成功！')));
+                      }
+                    } on DioException catch (e) {
+                       String errMsg = '警告下发失败';
+                       if (e.response?.statusCode == 403) errMsg = '越权操作：您没有下发警告的权限';
+                       if (e.response?.statusCode == 404) errMsg = '接口异常：未安装或未开启 Flarum-Warnings 插件';
+                       try {
+                         final errs = e.response?.data['errors'];
+                         if (errs != null && errs is List && errs.isNotEmpty && errs[0]['detail'] != null) {
+                           errMsg = errs[0]['detail'];
+                         }
+                       } catch (_) {}
+                       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg)));
+                    } finally {
+                      if (mounted) setStateDialog(() => isSubmitting = false);
+                    }
+                  },
+                  child: isSubmitting ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('确认警告'),
+                ),
+              ],
+            );
+          }
+        );
+      }
+    );
+  }
+
+  // ==========================================
 
   Future<void> _toggleLike(int index) async {
     final isLoggedIn = await widget.api.isLoggedIn;
@@ -323,8 +567,8 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
         final postId = int.parse(post['id']);
         final attrs = post['attributes'] ?? {};
         
-        final userId = post['relationships']?['user']?['data']?['id'];
-        final FlarumUser? user = userId != null ? _usersMap[userId] : null;
+        final userIdStr = post['relationships']?['user']?['data']?['id']?.toString();
+        final FlarumUser? user = userIdStr != null ? _usersMap[userIdStr] : null;
         
         final username = user?.displayName.isNotEmpty == true ? user!.displayName : (user?.username ?? '已注销');
         final avatarUrl = user?.avatarUrl;
@@ -428,12 +672,19 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                         return;
                       }
                       
+                      // [核心增强：选项分发器，全面唤起真实的对话框]
                       if (value == 'report') {
                         _showReportDialog(postId);
                       } else if (value == 'delete') {
                         _deletePost(postId, index);
-                      } else {
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('移动端暂不支持此拓展操作')));
+                      } else if (value == 'edit') {
+                        _showEditDialog(postId, index);
+                      } else if (value == 'tip') {
+                        _showTipDialog(postId);
+                      } else if (value == 'vote') {
+                        _showVoteDetails(index);
+                      } else if (value == 'warn') {
+                        _showWarnDialog(postId, userIdStr);
                       }
                     },
                     itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
@@ -443,7 +694,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                       ),
                       const PopupMenuItem<String>(
                         value: 'tip',
-                        child: Row(children: [Icon(Icons.card_giftcard, size: 18), SizedBox(width: 8), Text('打赏')]),
+                        child: Row(children: [Icon(Icons.card_giftcard, size: 18, color: Colors.orange), SizedBox(width: 8), Text('打赏')]),
                       ),
                       const PopupMenuItem<String>(
                         value: 'edit',
@@ -451,11 +702,11 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                       ),
                       const PopupMenuItem<String>(
                         value: 'vote',
-                        child: Row(children: [Icon(Icons.how_to_vote_outlined, size: 18), SizedBox(width: 8), Text('投票详情')]),
+                        child: Row(children: [Icon(Icons.how_to_vote_outlined, size: 18, color: Colors.blueAccent), SizedBox(width: 8), Text('投票/互动详情')]),
                       ),
                       const PopupMenuItem<String>(
                         value: 'warn',
-                        child: Row(children: [Icon(Icons.info_outline, size: 18), SizedBox(width: 8), Text('警告')]),
+                        child: Row(children: [Icon(Icons.info_outline, size: 18, color: Colors.redAccent), SizedBox(width: 8), Text('下发警告')]),
                       ),
                       const PopupMenuDivider(),
                       const PopupMenuItem<String>(
