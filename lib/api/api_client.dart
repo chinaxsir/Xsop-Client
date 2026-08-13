@@ -205,7 +205,8 @@ class ApiClient {
   }
 
   Future<Map<String, dynamic>> getNotifications() async {
-    final response = await _dio.get('/api/notifications', queryParameters: {'include': 'fromUser,fromUser.groups'});
+    // [核心修复：彻底移除会引发 400 崩溃的 fromUser.groups 非法请求参数，恢复白名单内的默认状态]
+    final response = await _dio.get('/api/notifications');
     return _asMap(response.data);
   }
 
@@ -222,7 +223,6 @@ class ApiClient {
     });
   }
 
-  // [核心新增：统一的文件直传逻辑，同时返回 URL 和源文件名]
   Future<Map<String, String>?> uploadFile(String filePath) async {
     final formData = FormData.fromMap({
       'files[]': await MultipartFile.fromFile(filePath),
