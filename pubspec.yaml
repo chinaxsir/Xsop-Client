@@ -16,8 +16,9 @@ dependencies:
   shared_preferences: ^2.2.0
   flutter_widget_from_html: ^0.15.1
   image_picker: ^1.1.2
-  # [核心新增：文件选择器，支持各种格式的附件上传]
   file_picker: ^8.1.2
+  # [核心新增：引入 FontAwesome 图标库，与 Flarum 网页端 100% 同步]
+  font_awesome_flutter: ^10.7.0
 
 dev_dependencies:
   flutter_test:
