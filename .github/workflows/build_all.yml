@@ -47,6 +47,11 @@ jobs:
           tar xf src_backup.tar
           
           awk '/<manifest/{print;print "    <uses-permission android:name=\"android.permission.INTERNET\"/>";next}1' android/app/src/main/AndroidManifest.xml > tmp.xml && mv tmp.xml android/app/src/main/AndroidManifest.xml
+
+          # [核心修复：拦截生成的 Gradle 文件，将默认的 compileSdk 强制升级到 36，秒杀 file_picker 报错]
+          sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/g' android/app/build.gradle
+          sed -i 's/compileSdk flutter.compileSdkVersion/compileSdk 36/g' android/app/build.gradle
+          sed -i 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 36/g' android/app/build.gradle
           
           flutter pub get
           dart run flutter_launcher_icons
