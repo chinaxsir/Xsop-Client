@@ -1,5 +1,3 @@
-# 文件位置: pubspec.yaml
-
 name: xsop_forum
 description: XSOP Forum - Flarum client built with Flutter.
 publish_to: 'none'
@@ -7,7 +5,8 @@ version: 0.1.0+1
 
 environment:
   sdk: '>=3.3.0 <4.0.0'
-  flutter: '>=3.19.0'
+  # [核心修复1：同步拔高 Flutter SDK 要求以兼容最新的图标库]
+  flutter: '>=3.27.0' 
 
 dependencies:
   flutter:
@@ -17,8 +16,8 @@ dependencies:
   flutter_widget_from_html: ^0.15.1
   image_picker: ^1.1.2
   file_picker: ^8.1.2
-  # [核心新增：引入 FontAwesome 图标库，与 Flarum 网页端 100% 同步]
-  font_awesome_flutter: ^10.7.0
+  # [核心修复2：强制升级至 11.0.0，完美解决 IconData 继承报错]
+  font_awesome_flutter: ^11.0.0
 
 dev_dependencies:
   flutter_test:
