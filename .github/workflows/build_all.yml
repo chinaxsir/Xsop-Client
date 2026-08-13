@@ -60,7 +60,7 @@ jobs:
           mkdir -p "$OUTPUT_DIR"
           
           TAG_SUFFIX="v1.0.${{ github.run_number }}"
-          FINAL_APK_NAME="Xsop${TAG_SUFFIX}.apk"
+          FINAL_APK_NAME="XPClent${TAG_SUFFIX}.apk"
           
           cp "build/app/outputs/flutter-apk/app-release.apk" "$OUTPUT_DIR/$FINAL_APK_NAME"
 
@@ -205,7 +205,7 @@ jobs:
           ldid -Sios/Runner/Runner.entitlements "$APP_PATH/"
           
           TAG_SUFFIX="v1.0.${{ github.run_number }}"
-          FINAL_IPA_NAME="Xsop${TAG_SUFFIX}.ipa"
+          FINAL_IPA_NAME="XPClent${TAG_SUFFIX}.ipa"
 
           mkdir -p "$OUTPUT_DIR"
           STAGING="${GITHUB_WORKSPACE}/build/staging"
