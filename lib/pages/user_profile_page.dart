@@ -2,7 +2,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:xsop_forum/models/flarum_models.dart';
-import 'package:xsop_forum/api/api_client.dart'; // 引入 API 支持主动刷新
+import 'package:xsop_forum/api/api_client.dart'; 
 import 'package:xsop_forum/main.dart'; 
 
 import 'package:xsop_forum/pages/discussion_detail_page.dart'; 
@@ -26,7 +26,6 @@ class _UserProfilePageState extends State<UserProfilePage> {
   void initState() {
     super.initState();
     _currentUser = widget.user;
-    // [核心修复：进入个人中心的一瞬间，静默向服务器请求最实时的该用户资产与徽章]
     _syncLatestUserData();
   }
 
@@ -40,7 +39,6 @@ class _UserProfilePageState extends State<UserProfilePage> {
         });
       }
     } catch (_) {
-      // 忽略网络失败，保留原本传递进来的缓存信息
     } finally {
       if (mounted) setState(() => _isRefreshing = false);
     }
@@ -88,7 +86,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
                 ),
                 const SizedBox(height: 16),
                 
-                // [完全还原截图2设计：名字旁边跟随徽章]
+                // [动态渲染身份徽章：管理员、会员、初级运维等]
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
@@ -98,8 +96,10 @@ class _UserProfilePageState extends State<UserProfilePage> {
                             fontWeight: FontWeight.bold,
                           ),
                     ),
-                    if (_currentUser.groups.isNotEmpty)
+                    if (_currentUser.groups.isNotEmpty) ...[
+                      const SizedBox(width: 8),
                       buildUserBadges(_currentUser.groups),
+                    ]
                   ],
                 ),
                 
@@ -112,26 +112,26 @@ class _UserProfilePageState extends State<UserProfilePage> {
                 ),
                 const SizedBox(height: 16),
                 
-                // [完全还原截图2设计：资产悬浮框]
+                // [核心修复：完美复刻网页端的资产栏 UI（无圆角药丸、去除多余点赞数）]
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                   decoration: BoxDecoration(
-                    color: const Color(0xFF6B7280), // 灰黑色徽章背景
-                    borderRadius: BorderRadius.circular(6),
+                    color: const Color(0xFF4B4844), // 高度还原网页的深褐灰色底板
+                    borderRadius: BorderRadius.circular(4), // 网页是微小圆角，不是正圆
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       const Icon(Icons.military_tech, size: 16, color: Colors.white),
                       const SizedBox(width: 4),
-                      Text('${_currentUser.groups.length}', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)), // 这里借用组的数量作为简单占位
-                      const SizedBox(width: 12),
+                      // 真实的勋章数量
+                      Text(_currentUser.badgesCount, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                      
+                      const SizedBox(width: 16),
                       
                       const Icon(Icons.thumb_up, size: 14, color: Colors.amber),
-                      const SizedBox(width: 4),
-                      Text(_currentUser.likesReceived, style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 13)),
-                      const SizedBox(width: 12),
-                      
+                      const SizedBox(width: 6),
+                      // 点赞图标直接跟金币绑定，没有中间多余的 '0'
                       Text('${_currentUser.money} XSD', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
                     ],
                   ),
