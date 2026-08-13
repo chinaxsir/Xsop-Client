@@ -1,6 +1,7 @@
 // 文件位置: lib/models/flarum_models.dart
 
 import 'package:flutter/material.dart';
+import 'package:font_awesome_flutter/font_awesome_flutter.dart'; // 引入原汁原味的图标库
 
 class FlarumGroup {
   final String id;
@@ -127,10 +128,14 @@ FlarumUser parseUser(Map<String, dynamic> json, String baseUrl) {
     displayName: attrs['displayName'] ?? attrs['username'] ?? 'Unknown',
     avatarUrl: avatar,
     money: attrs['money']?.toString() ?? '0',
-    // [核心修复：多维穿透取值！无论是声望、投票还是点赞，统统提取出来，防止遗漏那个“7”]
-    likesReceived: attrs['votes']?.toString() ?? 
+    // [核心修复：多维穿透取值！涵盖市面上所有 Flarum 点赞/声望插件的字段，确保 100% 抓取到那个 "7"]
+    likesReceived: attrs['likesReceived']?.toString() ?? 
+                   attrs['likes_received']?.toString() ??
+                   attrs['votes']?.toString() ?? 
                    attrs['points']?.toString() ?? 
-                   attrs['likesReceived']?.toString() ?? 
+                   attrs['likesCount']?.toString() ?? 
+                   attrs['likes']?.toString() ?? 
+                   attrs['reputation']?.toString() ?? 
                    '0',
     groups: userGroups, 
   );
@@ -193,10 +198,11 @@ DiscussionList parseDiscussionList(Map<String, dynamic> json, String baseUrl) {
         displayName: attrs['displayName'] ?? attrs['username'] ?? '',
         avatarUrl: avatar,
         money: attrs['money']?.toString() ?? '0',
-        // [核心修复：同步列表提取]
-        likesReceived: attrs['votes']?.toString() ?? 
+        likesReceived: attrs['likesReceived']?.toString() ?? 
+                       attrs['likes_received']?.toString() ??
+                       attrs['votes']?.toString() ?? 
                        attrs['points']?.toString() ?? 
-                       attrs['likesReceived']?.toString() ?? 
+                       attrs['likesCount']?.toString() ?? 
                        '0',
         groups: userGroups,
       );
@@ -248,6 +254,23 @@ DiscussionList parseDiscussionList(Map<String, dynamic> json, String baseUrl) {
   return DiscussionList(items, hasMore);
 }
 
+// [核心重构：Flarum 字符串到真实 FontAwesome 库的精准映射]
+IconData getFontAwesomeIcon(String? iconClass) {
+  if (iconClass == null || iconClass.isEmpty) return FontAwesomeIcons.certificate;
+  final lower = iconClass.toLowerCase();
+  if (lower.contains('crown')) return FontAwesomeIcons.crown; // 真正的皇冠 👑
+  if (lower.contains('wrench')) return FontAwesomeIcons.wrench; // 真正的扳手 🔧
+  if (lower.contains('shield')) return FontAwesomeIcons.shieldHalved;
+  if (lower.contains('star')) return FontAwesomeIcons.solidStar;
+  if (lower.contains('bolt')) return FontAwesomeIcons.bolt;
+  if (lower.contains('medal')) return FontAwesomeIcons.medal; // 真正的奖牌 🏅
+  if (lower.contains('award')) return FontAwesomeIcons.award;
+  if (lower.contains('thumbs-up') || lower.contains('thumbsup')) return FontAwesomeIcons.solidThumbsUp;
+  if (lower.contains('gem')) return FontAwesomeIcons.gem;
+  if (lower.contains('user')) return FontAwesomeIcons.solidUser;
+  return FontAwesomeIcons.certificate;
+}
+
 Widget buildUserBadges(List<FlarumGroup> groups) {
   if (groups.isEmpty) return const SizedBox.shrink();
   
@@ -266,19 +289,14 @@ Widget buildUserBadges(List<FlarumGroup> groups) {
       final hasIcon = g.icon != null && g.icon!.trim().isNotEmpty;
 
       if (hasIcon) {
-        IconData iconData = Icons.verified_user;
-        final i = g.icon!.toLowerCase();
-        if (i.contains('wrench')) iconData = Icons.build;
-        else if (i.contains('crown')) iconData = Icons.workspace_premium;
-        else if (i.contains('star')) iconData = Icons.star;
-        else if (i.contains('shield')) iconData = Icons.security;
-        else if (i.contains('bolt')) iconData = Icons.bolt;
-
         return Container(
           width: 20,
           height: 20,
           decoration: BoxDecoration(color: bgColor, shape: BoxShape.circle),
-          child: Icon(iconData, size: 12, color: Colors.white),
+          child: Center(
+            // [替换为纯正的 FontAwesome 渲染，和网页 100% 一模一样]
+            child: FaIcon(getFontAwesomeIcon(g.icon), size: 10, color: Colors.white),
+          ),
         );
       } else {
         return Container(
