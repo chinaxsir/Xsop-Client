@@ -1,7 +1,7 @@
 // 文件位置: lib/pages/editor_page.dart
 
 import 'package:flutter/material.dart';
-import 'package:dio/dio.dart'; // 引入以支持网络错误深度解析
+import 'package:dio/dio.dart'; 
 import 'package:image_picker/image_picker.dart'; 
 import 'package:file_picker/file_picker.dart'; 
 import 'package:xsop_forum/api/api_client.dart';
@@ -30,10 +30,43 @@ class _EditorPageState extends State<EditorPage> {
   bool _isSubmitting = false;
   bool _isUploading = false; 
   
+  // [核心增强：动态标签获取状态]
+  List<FlarumTag> _tags = [];
+  bool _isLoadingTags = false;
+  
   FlarumTag? _selectedPrimaryTag;
   final List<FlarumTag> _selectedSecondaryTags = [];
 
   bool get _isNewPost => widget.discussion == null;
+
+  @override
+  void initState() {
+    super.initState();
+    // [核心修复：如果外部没有传入标签，或者被独立唤起发帖，强制联网拉取最新标签树，杜绝绕过选择]
+    if (widget.availableTags != null && widget.availableTags!.isNotEmpty) {
+      _tags = widget.availableTags!;
+    } else if (_isNewPost) {
+      _fetchTags();
+    }
+  }
+
+  Future<void> _fetchTags() async {
+    setState(() => _isLoadingTags = true);
+    try {
+      final res = await widget.api.getTags();
+      if (mounted) {
+        setState(() {
+          _tags = parseTags(res);
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('获取标签失败，请检查网络')));
+      }
+    } finally {
+      if (mounted) setState(() => _isLoadingTags = false);
+    }
+  }
 
   void _insertMarkdown(String prefix, String suffix) {
     final text = _contentController.text;
@@ -53,7 +86,6 @@ class _EditorPageState extends State<EditorPage> {
     }
   }
 
-  // [核心修复：如果用户选择的板块携带了发帖模板，自动帮其插入到内容编辑框中]
   void _applyTagTemplate(FlarumTag tag) {
     if (tag.template != null && tag.template!.isNotEmpty) {
       final currentText = _contentController.text.trim();
@@ -79,7 +111,8 @@ class _EditorPageState extends State<EditorPage> {
         return;
       }
       
-      final allowedTags = widget.availableTags?.where((t) => t.canStartDiscussion).toList() ?? [];
+      // [核心严格校验：通过全局 _tags 计算要求]
+      final allowedTags = _tags.where((t) => t.canStartDiscussion).toList();
       final secondaryTags = allowedTags.where((t) => !t.isPrimary).toList();
       
       if (_selectedPrimaryTag == null) {
@@ -87,7 +120,7 @@ class _EditorPageState extends State<EditorPage> {
         return;
       }
       if (secondaryTags.isNotEmpty && _selectedSecondaryTags.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('发布失败：至少需要选择一个次标签')));
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('发布失败：必须至少选择一个次标签')));
         return;
       }
     }
@@ -116,7 +149,6 @@ class _EditorPageState extends State<EditorPage> {
         }
       }
     } on DioException catch (e) {
-      // [核心修复：深度拦截权限不足，直接透传 Flarum 系统的中文报错原因]
       String errMsg = '提交失败，请检查网络或权限';
       if (e.response?.statusCode == 403) errMsg = '权限不足：您没有在当前板块发帖的权限';
       if (e.response?.statusCode == 401) errMsg = '身份验证过期：请重新登录';
@@ -128,19 +160,11 @@ class _EditorPageState extends State<EditorPage> {
         }
       } catch (_) {}
       
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg)));
-      }
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg)));
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('发生未知错误，请重试')),
-        );
-      }
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('发生未知错误，请重试')));
     } finally {
-      if (mounted) {
-        setState(() => _isSubmitting = false);
-      }
+      if (mounted) setState(() => _isSubmitting = false);
     }
   }
 
@@ -152,15 +176,21 @@ class _EditorPageState extends State<EditorPage> {
     setState(() => _isUploading = true);
     
     try {
-      final fileInfo = await widget.api.uploadFile(pickedFile.path);
+      // 传递确切的文件名，供服务器精确判定扩展名
+      final fileName = pickedFile.name;
+      final fileInfo = await widget.api.uploadFile(pickedFile.path, filename: fileName);
       if (fileInfo != null && fileInfo['url']!.isNotEmpty) {
         _insertMarkdown('\n![图片](', '${fileInfo['url']})\n');
       } else {
          if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('上传未能获取到链接')));
       }
     } on DioException catch (e) {
+      // [深度拦截上传错误]
       String errMsg = '图片上传失败';
-      if (e.response?.statusCode == 403) errMsg = '权限不足：您无权上传图片';
+      if (e.response?.statusCode == 403) errMsg = '权限不足：当前等级无权上传图片';
+      else if (e.response?.statusCode == 413) errMsg = '文件过大：服务器拒绝接收（超过上传限制）';
+      else if (e.response?.statusCode == 422) errMsg = '格式受限：不支持的图片格式';
+      
       try {
         final errs = e.response?.data['errors'];
         if (errs != null && errs is List && errs.isNotEmpty && errs[0]['detail'] != null) {
@@ -168,6 +198,8 @@ class _EditorPageState extends State<EditorPage> {
         }
       } catch (_) {}
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg)));
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('图片上传异常: ${e.toString().split('\n').first}')));
     } finally {
       if (mounted) setState(() => _isUploading = false);
     }
@@ -180,7 +212,11 @@ class _EditorPageState extends State<EditorPage> {
     setState(() => _isUploading = true);
     
     try {
-      final fileInfo = await widget.api.uploadFile(result.files.single.path!);
+      final filePath = result.files.single.path!;
+      final fileName = result.files.single.name;
+      // [精确传递原始文件名]
+      final fileInfo = await widget.api.uploadFile(filePath, filename: fileName);
+      
       if (fileInfo != null && fileInfo['url']!.isNotEmpty) {
         final url = fileInfo['url']!;
         final name = fileInfo['baseName']!;
@@ -189,8 +225,12 @@ class _EditorPageState extends State<EditorPage> {
          if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('上传未能获取到文件链接')));
       }
     } on DioException catch (e) {
+      // [深度拦截附件上传错误]
       String errMsg = '附件上传失败';
-      if (e.response?.statusCode == 403) errMsg = '权限不足：当前等级无权上传附件';
+      if (e.response?.statusCode == 403) errMsg = '权限不足：当前等级无权上传此后缀附件';
+      else if (e.response?.statusCode == 413) errMsg = '文件过大：超过服务器单文件上传体积上限';
+      else if (e.response?.statusCode == 422) errMsg = '格式受限：服务器不允许上传该类型附件';
+      
       try {
         final errs = e.response?.data['errors'];
         if (errs != null && errs is List && errs.isNotEmpty && errs[0]['detail'] != null) {
@@ -198,6 +238,8 @@ class _EditorPageState extends State<EditorPage> {
         }
       } catch (_) {}
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg)));
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('附件上传异常: ${e.toString().split('\n').first}')));
     } finally {
       if (mounted) setState(() => _isUploading = false);
     }
@@ -212,7 +254,8 @@ class _EditorPageState extends State<EditorPage> {
 
   @override
   Widget build(BuildContext context) {
-    final allowedTags = widget.availableTags?.where((t) => t.canStartDiscussion).toList() ?? [];
+    // [依据动态刷新的标签数据进行分类]
+    final allowedTags = _tags.where((t) => t.canStartDiscussion).toList();
     final primaryTags = allowedTags.where((t) => t.isPrimary).toList();
     final secondaryTags = allowedTags.where((t) => !t.isPrimary).toList();
 
@@ -230,8 +273,9 @@ class _EditorPageState extends State<EditorPage> {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             child: FilledButton(
-              onPressed: _isSubmitting || _isUploading ? null : _submit,
-              child: _isSubmitting 
+              // [加载标签时，自动锁定发送按钮]
+              onPressed: _isSubmitting || _isUploading || _isLoadingTags ? null : _submit,
+              child: _isSubmitting || _isLoadingTags
                   ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
                   : const Text('发送'),
             ),
@@ -254,7 +298,14 @@ class _EditorPageState extends State<EditorPage> {
             ),
             const Divider(height: 1, thickness: 0.5, color: Color(0xFFE5E5EA)),
             
-            if (primaryTags.isNotEmpty)
+            // [如果标签还在联网获取中，则展示骨架屏动画]
+            if (_isLoadingTags)
+              const Padding(
+                padding: EdgeInsets.all(32.0),
+                child: Center(child: CircularProgressIndicator()),
+              ),
+            
+            if (!_isLoadingTags && primaryTags.isNotEmpty)
               Container(
                 width: double.infinity,
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -285,7 +336,7 @@ class _EditorPageState extends State<EditorPage> {
                 ),
               ),
             
-            if (secondaryTags.isNotEmpty)
+            if (!_isLoadingTags && secondaryTags.isNotEmpty)
               Container(
                 width: double.infinity,
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
