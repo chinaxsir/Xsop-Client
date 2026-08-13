@@ -205,7 +205,6 @@ class ApiClient {
   }
 
   Future<Map<String, dynamic>> getNotifications() async {
-    // [核心修复：彻底移除会引发 400 崩溃的 fromUser.groups 非法请求参数，恢复白名单内的默认状态]
     final response = await _dio.get('/api/notifications');
     return _asMap(response.data);
   }
@@ -223,9 +222,13 @@ class ApiClient {
     });
   }
 
-  Future<Map<String, String>?> uploadFile(String filePath) async {
+  // [核心修复：支持显式传入 filename 参数，打破文件类型识别壁垒]
+  Future<Map<String, String>?> uploadFile(String filePath, {String? filename}) async {
+    // 提取兜底文件名，确保后缀存在
+    String name = filename ?? filePath.split('/').last;
+    
     final formData = FormData.fromMap({
-      'files[]': await MultipartFile.fromFile(filePath),
+      'files[]': await MultipartFile.fromFile(filePath, filename: name),
     });
     
     final response = await _dio.post('/api/fof/upload', data: formData);
@@ -237,7 +240,7 @@ class ApiClient {
        if (attrs != null) {
          return {
            'url': attrs['url']?.toString() ?? '',
-           'baseName': attrs['baseName']?.toString() ?? '文件',
+           'baseName': attrs['baseName']?.toString() ?? name,
          };
        }
     }
