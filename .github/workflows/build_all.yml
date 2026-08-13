@@ -1,10 +1,21 @@
-name: Build All
+name: Build All Platforms
 
 on:
-  push:
-    branches: [ "main" ]
-  workflow_dispatch: # 允许手动触发
+  workflow_dispatch:
+    inputs:
+      release_notes:
+        description: '请输入本次版本的更新说明 (将自动展示在 Release 页面中)'
+        required: false
+        default: '修复底层插件之间 API 版本冲突引发的打包失败'
 
 jobs:
   call-private-build:
-    uses: chinaxsir/Xsop-Client-Workflows/.github/workflows/Client_build.yml@main
+    # 核心 1：将 chinaxsir/Xsop-Workflows 替换为你真实的私有仓库名
+   uses: chinaxsir/Xsop-Client-Workflows/.github/workflows/Client_build.yml@main
+    
+    # 核心 2：把手动触发时输入的文字，传递给私有工作流
+    with:
+      release_notes: ${{ github.event.inputs.release_notes }}
+      
+    # 核心 3：继承 secrets，因为私有仓库需要用 GITHUB_TOKEN 发 Release
+    secrets: inherit
