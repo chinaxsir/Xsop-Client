@@ -2,7 +2,6 @@
 
 import 'package:flutter/material.dart';
 
-// [修改备注：新增 Flarum 用户组（徽章）实体模型]
 class FlarumGroup {
   final String id;
   final String nameSingular;
@@ -20,7 +19,7 @@ class FlarumUser {
   final String? avatarUrl;
   final String money; 
   final String likesReceived;
-  // [修改备注：用户关联的所有徽章/用户组]
+  final String badgesCount; // [核心修复：新增真实的勋章/等级数量解析]
   final List<FlarumGroup> groups;
 
   FlarumUser({
@@ -30,6 +29,7 @@ class FlarumUser {
     this.avatarUrl,
     this.money = '0',
     this.likesReceived = '0',
+    this.badgesCount = '0',
     this.groups = const [],
   });
 }
@@ -84,7 +84,6 @@ class DiscussionList {
   DiscussionList(this.items, this.hasMore);
 }
 
-// 提取全局 groups 的辅助方法
 Map<String, FlarumGroup> _extractGroups(List<dynamic> included) {
   final Map<String, FlarumGroup> allGroups = {};
   for (var item in included) {
@@ -108,10 +107,11 @@ FlarumUser parseUser(Map<String, dynamic> json, String baseUrl) {
   final rels = data['relationships'] ?? {};
   final included = json['included'] as List<dynamic>? ?? [];
 
-  // 解析并映射徽章关系
   final allGroups = _extractGroups(included);
   List<FlarumGroup> userGroups = [];
-  final groupData = rels['groups']?['data'] as List<dynamic>? ?? [];
+  
+  final groupsRel = rels['groups'] as Map<String, dynamic>?;
+  final groupData = groupsRel?['data'] as List<dynamic>? ?? [];
   for (var g in groupData) {
     final gId = g['id'].toString();
     if (allGroups.containsKey(gId)) {
@@ -130,7 +130,13 @@ FlarumUser parseUser(Map<String, dynamic> json, String baseUrl) {
     avatarUrl: avatar,
     money: attrs['money']?.toString() ?? '0',
     likesReceived: attrs['likesReceived']?.toString() ?? '0',
-    groups: userGroups, // 挂载徽章
+    // [核心修复：智能提取用户的徽章数量或等级数据，如果获取不到则默认 0]
+    badgesCount: attrs['badgesCount']?.toString() ??
+                 attrs['level']?.toString() ??
+                 (rels['userBadges']?['data'] as List?)?.length.toString() ??
+                 (rels['badges']?['data'] as List?)?.length.toString() ??
+                 '0',
+    groups: userGroups, 
   );
 }
 
@@ -140,7 +146,6 @@ List<FlarumTag> parseTags(Map<String, dynamic> json) {
     final attrs = item['attributes'] ?? {};
     
     final pos = attrs['position'];
-    // [核心修复1：Flarum 官方极致鉴定法！只有 position 为纯数字的才是主标签，彻底杜绝所有空字符串和 null 的干扰]
     bool isPrimary = false;
     if (pos is int) {
       isPrimary = true;
@@ -175,7 +180,8 @@ DiscussionList parseDiscussionList(Map<String, dynamic> json, String baseUrl) {
       final rels = item['relationships'] ?? {};
       
       List<FlarumGroup> userGroups = [];
-      final groupData = rels['groups']?['data'] as List<dynamic>? ?? [];
+      final groupsRel = rels['groups'] as Map<String, dynamic>?;
+      final groupData = groupsRel?['data'] as List<dynamic>? ?? [];
       for (var g in groupData) {
         if (allGroups.containsKey(g['id'].toString())) {
           userGroups.add(allGroups[g['id'].toString()]!);
@@ -192,6 +198,11 @@ DiscussionList parseDiscussionList(Map<String, dynamic> json, String baseUrl) {
         avatarUrl: avatar,
         money: attrs['money']?.toString() ?? '0',
         likesReceived: attrs['likesReceived']?.toString() ?? '0',
+        badgesCount: attrs['badgesCount']?.toString() ??
+                     attrs['level']?.toString() ??
+                     (rels['userBadges']?['data'] as List?)?.length.toString() ??
+                     (rels['badges']?['data'] as List?)?.length.toString() ??
+                     '0',
         groups: userGroups,
       );
     } else if (item['type'] == 'tags') {
@@ -242,36 +253,51 @@ DiscussionList parseDiscussionList(Map<String, dynamic> json, String baseUrl) {
   return DiscussionList(items, hasMore);
 }
 
-// [修改备注：提供全局调用的徽章 UI 生成器]
 Widget buildUserBadges(List<FlarumGroup> groups) {
   if (groups.isEmpty) return const SizedBox.shrink();
-  return Row(
-    mainAxisSize: MainAxisSize.min,
+  
+  // [核心修复：使用 Wrap 避免挤压溢出，完美支持纯文字标签（如：初级运维）的渲染！]
+  return Wrap(
+    spacing: 6,
+    crossAxisAlignment: WrapCrossAlignment.center,
     children: groups.map((g) {
       Color bgColor = Colors.grey;
-      if (g.color != null) {
+      if (g.color != null && g.color!.isNotEmpty) {
         String hex = g.color!.replaceFirst('#', '');
         if (hex.length == 3) hex = hex.split('').map((c) => '$c$c').join();
         if (hex.length == 6) hex = 'FF$hex';
         bgColor = Color(int.tryParse(hex, radix: 16) ?? 0xFF9E9E9E);
       }
 
-      IconData iconData = Icons.verified_user;
-      if (g.icon != null) {
+      // 如果有 Icon，则显示圆形图标徽章
+      final hasIcon = g.icon != null && g.icon!.trim().isNotEmpty;
+
+      if (hasIcon) {
+        IconData iconData = Icons.verified_user;
         final i = g.icon!.toLowerCase();
         if (i.contains('wrench')) iconData = Icons.build;
         else if (i.contains('crown')) iconData = Icons.workspace_premium;
         else if (i.contains('star')) iconData = Icons.star;
         else if (i.contains('shield')) iconData = Icons.security;
         else if (i.contains('bolt')) iconData = Icons.bolt;
-      }
 
-      return Container(
-        margin: const EdgeInsets.only(left: 6),
-        padding: const EdgeInsets.all(3),
-        decoration: BoxDecoration(color: bgColor, borderRadius: BorderRadius.circular(6)),
-        child: Icon(iconData, size: 12, color: Colors.white),
-      );
+        return Container(
+          width: 20,
+          height: 20,
+          decoration: BoxDecoration(color: bgColor, shape: BoxShape.circle),
+          child: Icon(iconData, size: 12, color: Colors.white),
+        );
+      } else {
+        // 如果没有 Icon，则完美复刻网页版：显示为带圆角的文字标签块
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+          decoration: BoxDecoration(color: bgColor, borderRadius: BorderRadius.circular(4)),
+          child: Text(
+            g.nameSingular.isNotEmpty ? g.nameSingular : '标签', 
+            style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold, height: 1.1)
+          ),
+        );
+      }
     }).toList(),
   );
 }
