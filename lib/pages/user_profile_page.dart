@@ -111,7 +111,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
                 ),
                 const SizedBox(height: 16),
                 
-                // [修改备注：重新排列了资产栏的组合顺序，将“7”映射为点赞/声望数]
+                // [核心修复：完美对齐网页截图，展示 `徽章 - 7 - 大拇指 - 金币`]
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                   decoration: BoxDecoration(
@@ -123,14 +123,11 @@ class _UserProfilePageState extends State<UserProfilePage> {
                     children: [
                       const Icon(Icons.military_tech, size: 16, color: Colors.white),
                       const SizedBox(width: 4),
-                      // 这里对应网页截图中的数字（获赞数/声望值）
                       Text(_currentUser.likesReceived, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
                       const SizedBox(width: 4),
                       const Icon(Icons.thumb_up, size: 14, color: Colors.amber),
                       
                       const SizedBox(width: 16),
-                      
-                      // 纯粹的资金数据
                       Text('${_currentUser.money} XSD', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
                     ],
                   ),
@@ -142,7 +139,6 @@ class _UserProfilePageState extends State<UserProfilePage> {
           
           ListTile(
             leading: const Icon(Icons.history),
-            // [修改备注：将“我的发帖”更名为“社区互动”]
             title: const Text('社区互动'),
             trailing: const Icon(Icons.chevron_right, color: Colors.grey),
             onTap: () {
@@ -267,7 +263,6 @@ class _UserDiscussionsPageState extends State<UserDiscussionsPage> {
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
-        // [修改备注：同步修改子页面的标题]
         title: const Text('社区互动', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
         backgroundColor: Colors.white,
         surfaceTintColor: Colors.transparent,
@@ -297,7 +292,6 @@ class _UserDiscussionsPageState extends State<UserDiscussionsPage> {
       );
     }
     if (_discussions.isEmpty) {
-      // [修改备注：同步修改空状态提示]
       return const Center(child: Text('暂无互动记录', style: TextStyle(color: Colors.grey)));
     }
 
