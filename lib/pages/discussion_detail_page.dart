@@ -47,7 +47,8 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
 
       for (var item in included) {
         if (item['type'] == 'users') {
-          users[item['id']] = item;
+          // 直接利用强大的底层辅助函数提取用户完整的徽章对象
+          users[item['id']] = parseUser({'data': item, 'included': included}, widget.api.baseUrl);
         } else if (item['type'] == 'posts' && item['attributes']?['contentType'] == 'comment') {
           postsList.add(item);
         }
@@ -104,7 +105,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
     }
   }
 
-  // [修改备注：实现底层删帖接口调用逻辑]
   Future<void> _deletePost(int postId, int index) async {
     try {
       await widget.api.deletePost(postId);
@@ -288,10 +288,10 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
         final attrs = post['attributes'] ?? {};
         
         final userId = post['relationships']?['user']?['data']?['id'];
-        final user = userId != null ? _usersMap[userId] : null;
+        final FlarumUser? user = userId != null ? _usersMap[userId] : null;
         
-        final username = user?['attributes']?['displayName'] ?? user?['attributes']?['username'] ?? '已注销';
-        final avatarUrl = user?['attributes']?['avatarUrl'];
+        final username = user?.displayName.isNotEmpty == true ? user!.displayName : (user?.username ?? '已注销');
+        final avatarUrl = user?.avatarUrl;
         final timeStr = attrs['createdAt'] as String?;
         final time = timeStr != null ? DateTime.tryParse(timeStr) : null;
         
@@ -318,7 +318,14 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(username, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+                        Row(
+                          children: [
+                            Text(username, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+                            // [在楼层中实时还原网页版徽章展示]
+                            if (user != null && user.groups.isNotEmpty)
+                              buildUserBadges(user.groups),
+                          ],
+                        ),
                         if (time != null)
                           const SizedBox(height: 2),
                         if (time != null)
@@ -339,7 +346,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
 
               const SizedBox(height: 12),
               
-              // [修改备注：根据网页版截图重排了底部的功能栏：赞、回复、以及 "..." 更多菜单栏]
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
@@ -375,7 +381,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                   ),
                   const SizedBox(width: 8),
 
-                  // [修改备注：高度还原网页版菜单：举报、打赏、编辑、投票、警告、删除]
                   PopupMenuButton<String>(
                     icon: Icon(Icons.more_horiz, color: Colors.grey.shade500),
                     color: Colors.white,
@@ -393,7 +398,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                       } else if (value == 'delete') {
                         _deletePost(postId, index);
                       } else {
-                        // 未开放功能的预留 Toast
                         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('移动端暂不支持此拓展操作')));
                       }
                     },
