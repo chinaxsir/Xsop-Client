@@ -1,5 +1,6 @@
 // 文件位置: lib/pages/notifications_page.dart
 
+import 'dart:async'; // 引入定时器库
 import 'package:flutter/material.dart';
 import 'package:xsop_forum/api/api_client.dart';
 import 'package:xsop_forum/pages/home_page.dart' show formatRelativeTime;
@@ -12,26 +13,31 @@ class NotificationsPage extends StatefulWidget {
   State<NotificationsPage> createState() => _NotificationsPageState();
 }
 
-// [核心修复 1：混入 WidgetsBindingObserver 监听系统生命周期]
 class _NotificationsPageState extends State<NotificationsPage> with WidgetsBindingObserver {
   bool _isLoading = true;
   String? _error;
   List<dynamic> _notifications = [];
+  
+  // 声明定时器
+  Timer? _pollingTimer;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this); // 注册监听
+    WidgetsBinding.instance.addObserver(this); 
     _loadData();
+    
+    // [核心修复 3：设置 15 秒的心跳轮询，当用户在该页面时，实现通知的实时同步]
+    _pollingTimer = Timer.periodic(const Duration(seconds: 15), (_) => _loadData(silent: true));
   }
 
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this); // 销毁监听
+    _pollingTimer?.cancel(); // 退出页面时立即销毁定时器，防止内存泄漏
+    WidgetsBinding.instance.removeObserver(this); 
     super.dispose();
   }
 
-  // [核心修复 2：感知到系统唤醒，立刻静默重新拉取数据，修复网络死锁]
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
@@ -93,7 +99,6 @@ class _NotificationsPageState extends State<NotificationsPage> with WidgetsBindi
       return const Center(child: CircularProgressIndicator());
     }
     
-    // [核心修复 3：废弃原本死板的文本报错，换为带刷新按钮的优雅挽救界面]
     if (_error != null) {
       return Center(
         child: Column(
@@ -113,19 +118,28 @@ class _NotificationsPageState extends State<NotificationsPage> with WidgetsBindi
     }
     
     if (_notifications.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.notifications_none, size: 56, color: Colors.grey.shade300),
-            const SizedBox(height: 16),
-            Text('暂无新通知', style: TextStyle(color: Colors.grey.shade400, fontSize: 14)),
-          ],
-        ),
+      return CustomScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        slivers: [
+          SliverFillRemaining(
+            hasScrollBody: false,
+            child: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.notifications_none, size: 56, color: Colors.grey.shade300),
+                  const SizedBox(height: 16),
+                  Text('暂无新通知', style: TextStyle(color: Colors.grey.shade400, fontSize: 14)),
+                ],
+              ),
+            ),
+          ),
+        ],
       );
     }
     
     return ListView.separated(
+      physics: const AlwaysScrollableScrollPhysics(),
       itemCount: _notifications.length,
       separatorBuilder: (_, __) => const Divider(height: 1, thickness: 0.5, color: Color(0xFFE5E5EA)),
       itemBuilder: (context, index) {
@@ -148,7 +162,7 @@ class _NotificationsPageState extends State<NotificationsPage> with WidgetsBindi
                 )
               : null,
           onTap: () {
-            // 后续可在这里添加点击通知跳转逻辑
+            // 点击可拓展相关操作
           },
         );
       },
