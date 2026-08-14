@@ -11,7 +11,6 @@ import 'package:xsop_forum/pages/login_page.dart';
 import 'package:xsop_forum/pages/editor_page.dart';
 import 'package:xsop_forum/pages/notifications_page.dart';
 
-// [核心修复1：混入 WidgetsBindingObserver 以全面接管操作系统的挂起/唤醒事件]
 class HomePage extends StatefulWidget {
   final ApiClient api;
   final String baseUrl;
@@ -46,7 +45,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
-    // 注册系统生命周期观察者
     WidgetsBinding.instance.addObserver(this);
     _scrollController.addListener(_onScroll);
     _loadAllGlobalData();
@@ -54,19 +52,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   @override
   void dispose() {
-    // 销毁时移除观察者
     WidgetsBinding.instance.removeObserver(this);
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
     super.dispose();
   }
 
-  // [核心修复2：拦截生命周期变化]
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      // 当应用从后台返回、或手机熄屏后重新点亮时触发。
-      // 静默拉取最新数据，用于重建已经被系统强制切断的底层 TCP/IP 链接。
       _loadAllGlobalData(isSilentWakeup: true);
     }
   }
@@ -76,7 +70,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     await _loadCurrentUser();
     await _loadTags();
     
-    // 如果是静默唤醒，我们不在前台弹出明显的 loading 动画，而是后台暗中刷新
     if (isSilentWakeup) {
       _refresh(skipGlobalSync: true, silent: true);
     } else {
@@ -185,7 +178,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   void _selectTag(String? slug) {
     _scaffoldKey.currentState?.closeDrawer();
-    
     if (slug == _selectedTagSlug) return;
     
     setState(() {
@@ -195,7 +187,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (_scrollController.hasClients) {
       _scrollController.jumpTo(0);
     }
-    
     _refresh();
   }
 
@@ -247,7 +238,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       ),
       drawer: _buildDrawer(),
       body: RefreshIndicator(
-        onRefresh: () => _refresh(), // 手动下拉依然全量刷新
+        onRefresh: () => _refresh(), 
         child: _buildBody(),
       ),
       floatingActionButton: FloatingActionButton(
@@ -306,7 +297,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   Widget _buildDrawer() {
     final scheme = Theme.of(context).colorScheme;
-    
     final primaryTags = _allTags.where((t) => t.isPrimary).toList();
     final secondaryTags = _allTags.where((t) => !t.isPrimary).toList();
 
@@ -340,7 +330,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     padding: EdgeInsets.symmetric(vertical: 8),
                     child: Divider(height: 1, indent: 12, endIndent: 12),
                   ),
-                  
                   if (primaryTags.isNotEmpty) ...[
                     Padding(
                       padding: const EdgeInsets.only(left: 16, top: 8, bottom: 8),
@@ -354,7 +343,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                         onTap: () => _selectTag(tag.slug),
                       ),
                   ],
-
                   if (secondaryTags.isNotEmpty) ...[
                     Padding(
                       padding: const EdgeInsets.only(left: 16, top: 16, bottom: 8),
@@ -368,7 +356,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                         onTap: () => _selectTag(tag.slug),
                       ),
                   ],
-                  
                   if (_allTags.isEmpty)
                     const Padding(
                       padding: EdgeInsets.all(24),
