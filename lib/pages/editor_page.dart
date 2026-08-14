@@ -23,7 +23,8 @@ class EditorPage extends StatefulWidget {
   State<EditorPage> createState() => _EditorPageState();
 }
 
-class _EditorPageState extends State<EditorPage> {
+// [核心修复 1：混入 WidgetsBindingObserver 监听系统挂起/唤醒]
+class _EditorPageState extends State<EditorPage> with WidgetsBindingObserver {
   final _titleController = TextEditingController();
   final _contentController = TextEditingController();
   
@@ -41,10 +42,30 @@ class _EditorPageState extends State<EditorPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this); // 注册监听器
+    
     if (widget.availableTags != null && widget.availableTags!.isNotEmpty) {
       _tags = widget.availableTags!;
     } else if (_isNewPost) {
       _fetchTags();
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this); // 销毁监听器
+    _titleController.dispose();
+    _contentController.dispose();
+    super.dispose();
+  }
+
+  // [核心修复 2：系统唤醒时，如果标签意外丢失，立刻静默重拉]
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      if (_isNewPost && _tags.isEmpty && !_isLoadingTags) {
+        _fetchTags();
+      }
     }
   }
 
@@ -239,13 +260,6 @@ class _EditorPageState extends State<EditorPage> {
   }
 
   @override
-  void dispose() {
-    _titleController.dispose();
-    _contentController.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
     final allowedTags = _tags.where((t) => t.canStartDiscussion).toList();
     final primaryTags = allowedTags.where((t) => t.isPrimary).toList();
@@ -293,6 +307,26 @@ class _EditorPageState extends State<EditorPage> {
               const Padding(
                 padding: EdgeInsets.all(32.0),
                 child: Center(child: CircularProgressIndicator()),
+              ),
+              
+            // [核心修复 3：如果在断网醒来后发现标签彻底丢失，则展示一个漂亮的重试占位符，而不是让板块选择区凭空消失]
+            if (!_isLoadingTags && primaryTags.isEmpty)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
+                child: Column(
+                  children: [
+                    Icon(Icons.wifi_off, size: 36, color: Colors.grey.shade300),
+                    const SizedBox(height: 8),
+                    Text('无法获取板块标签，网络可能已断开', style: TextStyle(color: Colors.grey.shade500, fontSize: 13)),
+                    const SizedBox(height: 12),
+                    FilledButton.tonal(
+                      onPressed: _fetchTags,
+                      style: FilledButton.styleFrom(minimumSize: const Size(100, 36)),
+                      child: const Text('重新获取'),
+                    ),
+                  ],
+                ),
               ),
             
             if (!_isLoadingTags && primaryTags.isNotEmpty)
@@ -405,7 +439,6 @@ class _EditorPageState extends State<EditorPage> {
                     tooltip: '插入图片',
                     color: Colors.grey.shade700,
                   ),
-                  // [核心修复：全面补齐网页端发帖功能栏]
                   _buildToolbarBtn(Icons.title, () => _insertMarkdown('### ', ''), '标题'),
                   _buildToolbarBtn(Icons.format_bold, () => _insertMarkdown('**', '**'), '加粗'),
                   _buildToolbarBtn(Icons.format_italic, () => _insertMarkdown('*', '*'), '斜体'),
@@ -414,7 +447,6 @@ class _EditorPageState extends State<EditorPage> {
                   _buildToolbarBtn(Icons.warning_amber_outlined, () => _insertMarkdown('>! ', ' !<'), '防透剧(折叠)'),
                   _buildToolbarBtn(Icons.code, () => _insertMarkdown('\n```\n', '\n```\n'), '代码块'),
                   _buildToolbarBtn(Icons.link, () => _insertMarkdown('[', '](https://)'), '插入链接'),
-                  
                   _buildToolbarBtn(Icons.format_list_bulleted, () => _insertMarkdown('\n- ', ''), '无序列表'),
                   _buildToolbarBtn(Icons.format_list_numbered, () => _insertMarkdown('\n1. ', ''), '有序列表'),
                   _buildToolbarBtn(Icons.monetization_on_outlined, () => _insertMarkdown('[charge=10]', '[/charge]'), '插入付费阅读'),
