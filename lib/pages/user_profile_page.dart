@@ -29,7 +29,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
     super.initState();
     _currentUserData = widget.user;
     _checkIfCurrentUser();
-    _refreshUserData(); // 页面打开时，主动同步一次最新数据
+    _refreshUserData(); 
   }
 
   Future<void> _checkIfCurrentUser() async {
@@ -41,7 +41,6 @@ class _UserProfilePageState extends State<UserProfilePage> {
     }
   }
 
-  // [核心增强：从服务器拉取当前用户的最新资产和徽章状态，确保与网页端实时同步]
   Future<void> _refreshUserData() async {
     if (_isRefreshing) return;
     setState(() => _isRefreshing = true);
@@ -117,15 +116,8 @@ class _UserProfilePageState extends State<UserProfilePage> {
                         _MenuItem(icon: Icons.chat_bubble_outline, color: Colors.lightBlue, title: '我的回复', onTap: () => _navigateToActivity('我的回复', 'posts')),
                       ],
                     ),
-                    const SizedBox(height: 24),
                     
-                    _buildSectionGroup(
-                      title: '个人资产',
-                      items: [
-                        _MenuItem(icon: Icons.thumb_up_alt_outlined, color: Colors.orange, title: '收到的点赞', trailingText: _currentUserData.likesReceived, hideArrow: true, onTap: () {}),
-                        _MenuItem(icon: Icons.account_balance_wallet_outlined, color: Colors.amber, title: 'XSD 余额', trailingText: '${_currentUserData.money} XSD', hideArrow: true, onTap: () {}),
-                      ],
-                    ),
+                    // [核心修复：移除了重复展示点赞与余额的“个人资产”区块，UI更清爽]
                     const SizedBox(height: 24),
 
                     _buildSectionGroup(
