@@ -8,9 +8,4 @@ on:
         required: false
         default: '修复底层插件之间 API 版本冲突引发的打包失败'
 
-jobs:
-  call-private-build:
-    uses: chinaxsir/Xsop-Client-Workflows/.github/workflows/Client_build.yml@main
-    with:
-      release_notes: ${{ github.event.inputs.release_notes }}
-    secrets: inherit
+
