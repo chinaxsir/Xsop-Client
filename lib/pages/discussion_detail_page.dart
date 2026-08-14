@@ -73,14 +73,8 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
     }
   }
 
-  // ==========================================
-  // [核心增强：帖子菜单选项 1-1 全面深度集成]
-  // ==========================================
-
-  // 1. 编辑功能弹窗
   Future<void> _showEditDialog(int postId, int index) async {
     final post = _posts[index];
-    // 解析 Flarum 原生 Markdown 格式
     final initialContent = post['attributes']?['content'] as String? ?? '';
     final editController = TextEditingController(text: initialContent);
 
@@ -117,7 +111,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                         Navigator.pop(context);
                         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('编辑成功')));
                         setState(() => _isLoading = true);
-                        _loadDiscussionDetail(); // 重新拉取展示最新内容
+                        _loadDiscussionDetail(); 
                       }
                     } on DioException catch (e) {
                        String errMsg = '编辑失败';
@@ -143,7 +137,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
     );
   }
 
-  // 2. 打赏弹窗
   Future<void> _showTipDialog(int postId) async {
     final amountController = TextEditingController();
 
@@ -208,12 +201,10 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
     );
   }
 
-  // 3. 投票详情
   void _showVoteDetails(int index) {
     final post = _posts[index];
     final attrs = post['attributes'] ?? {};
     
-    // Flarum 各大投票/点赞插件通用的点赞字段抓取
     final upvotes = attrs['upvotes'] ?? attrs['likesCount'] ?? attrs['points'] ?? attrs['votes'] ?? 0;
     final downvotes = attrs['downvotes'] ?? 0;
     
@@ -250,14 +241,17 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
     );
   }
 
-  // 4. 警告用户
+  // [核心修复：同步个人中心最新的高级警告面板，完美对齐新版 API 参数]
   Future<void> _showWarnDialog(int postId, String? userIdStr) async {
     if (userIdStr == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('无法获取用户信息，警告失败')));
       return;
     }
     final userId = int.parse(userIdStr);
-    final warnController = TextEditingController();
+    
+    final strikesCtrl = TextEditingController(text: '1');
+    final publicCtrl = TextEditingController();
+    final privateCtrl = TextEditingController();
 
     await showDialog(
       context: context,
@@ -269,12 +263,25 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
               backgroundColor: Colors.white,
               surfaceTintColor: Colors.transparent,
               title: const Row(children: [Icon(Icons.warning_amber, color: Colors.redAccent), SizedBox(width: 8), Text('下发违规警告')]),
-              content: TextField(
-                controller: warnController,
-                maxLines: 3,
-                decoration: const InputDecoration(
-                  hintText: '请输入警告原因（该记录可能被公开展示）',
-                  border: OutlineInputBorder(),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('严重程度：记几分？', style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 6),
+                    TextField(controller: strikesCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(border: OutlineInputBorder(), isDense: true)),
+                    const SizedBox(height: 16),
+                    
+                    const Text('用户批注。为什么警告？（批注对用户可见）', style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 6),
+                    TextField(controller: publicCtrl, maxLines: 3, decoration: const InputDecoration(border: OutlineInputBorder())),
+                    const SizedBox(height: 16),
+                    
+                    const Text('管理员备注。（备注仅对管理员可见）', style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 6),
+                    TextField(controller: privateCtrl, maxLines: 3, decoration: const InputDecoration(border: OutlineInputBorder())),
+                  ],
                 ),
               ),
               actions: [
@@ -282,10 +289,16 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                 FilledButton(
                   style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
                   onPressed: isSubmitting ? null : () async {
-                    if (warnController.text.trim().isEmpty) return;
                     setStateDialog(() => isSubmitting = true);
                     try {
-                      await widget.api.warnUser(userId, postId, warnController.text.trim());
+                      // [核心修复点：将传参方式更改为命名参数（Named Parameters），修复编译报错]
+                      await widget.api.warnUser(
+                        userId, 
+                        postId: postId,
+                        strikes: int.tryParse(strikesCtrl.text) ?? 0,
+                        publicComment: publicCtrl.text.trim(),
+                        privateComment: privateCtrl.text.trim(),
+                      );
                       if (mounted) {
                         Navigator.pop(context);
                         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('警告下发成功！')));
@@ -314,8 +327,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
       }
     );
   }
-
-  // ==========================================
 
   Future<void> _toggleLike(int index) async {
     final isLoggedIn = await widget.api.isLoggedIn;
@@ -672,7 +683,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                         return;
                       }
                       
-                      // [核心增强：选项分发器，全面唤起真实的对话框]
                       if (value == 'report') {
                         _showReportDialog(postId);
                       } else if (value == 'delete') {
