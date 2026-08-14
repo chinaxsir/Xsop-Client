@@ -191,13 +191,15 @@ class ApiClient {
     });
   }
 
-  Future<void> warnUser(int userId, int? postId, String reason) async {
+  // [核心修复：完美对齐网页端图 3，支持下发扣分、用户批注和管理员备注]
+  Future<void> warnUser(int userId, {int? postId, int strikes = 0, String? publicComment, String? privateComment}) async {
     final Map<String, dynamic> data = {
       "data": {
         "type": "warnings",
         "attributes": {
-          "strikes": 1,
-          "publicComment": reason,
+          "strikes": strikes,
+          "publicComment": publicComment ?? "",
+          "privateComment": privateComment ?? "",
         },
         "relationships": {
           "user": {
@@ -254,19 +256,6 @@ class ApiClient {
     return _asMap(response.data);
   }
 
-  Future<void> suspendUser(int userId, DateTime? suspendUntil, String? reason) async {
-    await _dio.patch('/api/users/$userId', data: {
-      "data": {
-        "type": "users",
-        "id": userId.toString(),
-        "attributes": {
-          "suspendUntil": suspendUntil?.toIso8601String(),
-          "suspendMessage": reason
-        }
-      }
-    });
-  }
-
   Future<Map<String, String>?> uploadFile(String filePath, {String? filename}) async {
     String name = filename ?? filePath.split('/').last;
     final formData = FormData.fromMap({
@@ -298,7 +287,6 @@ class ApiClient {
     return token != null && token.isNotEmpty;
   }
 
-  // [核心增强：提供底层通用接口，方便一键查询任何扩展插件的数据流水]
   Future<Map<String, dynamic>> getDynamicList(String endpoint, {Map<String, dynamic>? queryParameters}) async {
     final response = await _dio.get(endpoint, queryParameters: queryParameters);
     return _asMap(response.data);
