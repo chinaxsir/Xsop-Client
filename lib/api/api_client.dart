@@ -75,46 +75,27 @@ class ApiClient {
       'page[size]': pageSize,
     };
     
+    if (tag != null && tag.isNotEmpty) query['filter[tag]'] = tag.trim();
+    
     List<String> searchQueries = [];
-    
-    if (tag != null && tag.isNotEmpty) {
-      query['filter[tag]'] = tag.trim();
-    }
-    if (author != null && author.isNotEmpty) {
-      searchQueries.add('author:${author.trim()}');
-    }
-    
-    if (searchQueries.isNotEmpty) {
-      query['filter[q]'] = searchQueries.join(' ');
-    }
-    
+    if (author != null && author.isNotEmpty) searchQueries.add('author:${author.trim()}');
+    if (searchQueries.isNotEmpty) query['filter[q]'] = searchQueries.join(' ');
     if (sort != null) query['sort'] = sort;
 
     final response = await _dio.get('/api/discussions', queryParameters: query);
     return _asMap(response.data);
   }
 
-  Future<Map<String, dynamic>> getDiscussion(
-    int id, {
-    int page = 1,
-    int pageSize = 20,
-  }) async {
+  Future<Map<String, dynamic>> getDiscussion(int id, {int page = 1, int pageSize = 20}) async {
     final response = await _dio.get(
       '/api/discussions/$id',
-      queryParameters: {
-        'page[number]': page,
-        'page[size]': pageSize,
-        'include': 'user,posts,posts.user',
-      },
+      queryParameters: {'page[number]': page, 'page[size]': pageSize, 'include': 'user,posts,posts.user'},
     );
     return _asMap(response.data);
   }
 
   Future<Map<String, dynamic>> getTags() async {
-    final response = await _dio.get(
-      '/api/tags', 
-      queryParameters: {'include': 'parent'}
-    );
+    final response = await _dio.get('/api/tags', queryParameters: {'include': 'parent'});
     return _asMap(response.data);
   }
 
@@ -123,41 +104,14 @@ class ApiClient {
     return _asMap(response.data);
   }
 
-  Future<Map<String, dynamic>> createDiscussion({
-    required String title,
-    required String content,
-    List<String>? tagIds,
-    List<String>? recipientUserIds,
-  }) async {
+  Future<Map<String, dynamic>> createDiscussion({required String title, required String content, List<String>? tagIds}) async {
     final Map<String, dynamic> relationships = {};
-
     if (tagIds != null && tagIds.isNotEmpty) {
-      relationships["tags"] = {
-        "data": tagIds.map((id) => {"type": "tags", "id": id}).toList()
-      };
+      relationships["tags"] = {"data": tagIds.map((id) => {"type": "tags", "id": id}).toList()};
     }
-
-    if (recipientUserIds != null && recipientUserIds.isNotEmpty) {
-      relationships["recipientUsers"] = {
-        "data": recipientUserIds.map((id) => {"type": "users", "id": id}).toList()
-      };
-    }
-
-    final Map<String, dynamic> payloadData = {
-      "type": "discussions",
-      "attributes": {
-        "title": title,
-        "content": content,
-      }
-    };
-
-    if (relationships.isNotEmpty) {
-      payloadData["relationships"] = relationships;
-    }
-
-    final data = {"data": payloadData};
-
-    final response = await _dio.post('/api/discussions', data: data);
+    final Map<String, dynamic> payloadData = {"type": "discussions", "attributes": {"title": title, "content": content}};
+    if (relationships.isNotEmpty) payloadData["relationships"] = relationships;
+    final response = await _dio.post('/api/discussions', data: {"data": payloadData});
     return _asMap(response.data);
   }
 
@@ -167,9 +121,7 @@ class ApiClient {
         "type": "posts",
         "attributes": {"content": content},
         "relationships": {
-          "discussion": {
-            "data": {"type": "discussions", "id": discussionId.toString()}
-          }
+          "discussion": {"data": {"type": "discussions", "id": discussionId.toString()}}
         }
       }
     };
@@ -183,44 +135,27 @@ class ApiClient {
 
   Future<void> editPost(int postId, String content) async {
     await _dio.patch('/api/posts/$postId', data: {
-      "data": {
-        "type": "posts",
-        "id": postId.toString(),
-        "attributes": {"content": content}
-      }
+      "data": {"type": "posts", "id": postId.toString(), "attributes": {"content": content}}
     });
   }
 
-  // [核心修复：完美对齐网页端图 3，支持下发扣分、用户批注和管理员备注]
   Future<void> warnUser(int userId, {int? postId, int strikes = 0, String? publicComment, String? privateComment}) async {
     final Map<String, dynamic> data = {
       "data": {
         "type": "warnings",
-        "attributes": {
-          "strikes": strikes,
-          "publicComment": publicComment ?? "",
-          "privateComment": privateComment ?? "",
-        },
-        "relationships": {
-          "user": {
-            "data": {"type": "users", "id": userId.toString()}
-          }
-        }
+        "attributes": {"strikes": strikes, "publicComment": publicComment ?? "", "privateComment": privateComment ?? ""},
+        "relationships": {"user": {"data": {"type": "users", "id": userId.toString()}}}
       }
     };
     if (postId != null) {
-      data["data"]["relationships"]["post"] = {
-        "data": {"type": "posts", "id": postId.toString()}
-      };
+      data["data"]["relationships"]["post"] = {"data": {"type": "posts", "id": postId.toString()}};
     }
     await _dio.post('/api/warnings', data: data);
   }
 
   Future<void> tipPost(int postId, int amount) async {
     await _dio.post('/api/posts/$postId/tip', data: {
-      "data": {
-        "attributes": {"amount": amount}
-      }
+      "data": {"attributes": {"amount": amount}}
     });
   }
 
@@ -228,49 +163,36 @@ class ApiClient {
     await _dio.post('/api/flags', data: {
       "data": {
         "type": "flags",
-        "attributes": {
-          "reason": reason,
-          "reasonDetail": detail ?? ""
-        },
-        "relationships": {
-          "post": {
-            "data": {"type": "posts", "id": postId.toString()}
-          }
-        }
+        "attributes": {"reason": reason, "reasonDetail": detail ?? ""},
+        "relationships": {"post": {"data": {"type": "posts", "id": postId.toString()}}}
       }
     });
   }
 
   Future<void> likePost(int postId, bool isLiked) async {
     await _dio.patch('/api/posts/$postId', data: {
-      "data": {
-        "type": "posts",
-        "id": postId.toString(),
-        "attributes": {"isLiked": isLiked}
-      }
+      "data": {"type": "posts", "id": postId.toString(), "attributes": {"isLiked": isLiked}}
     });
   }
 
+  // [核心修复：获取通知时，强力注入发送人和关联事项的数据字典，告别单一的英文单词]
   Future<Map<String, dynamic>> getNotifications() async {
-    final response = await _dio.get('/api/notifications');
+    final response = await _dio.get('/api/notifications', queryParameters: {
+      'include': 'fromUser,subject'
+    });
     return _asMap(response.data);
   }
 
   Future<Map<String, String>?> uploadFile(String filePath, {String? filename}) async {
     String name = filename ?? filePath.split('/').last;
-    final formData = FormData.fromMap({
-      'files[]': await MultipartFile.fromFile(filePath, filename: name),
-    });
+    final formData = FormData.fromMap({'files[]': await MultipartFile.fromFile(filePath, filename: name)});
     final response = await _dio.post('/api/fof/upload', data: formData);
     final data = _asMap(response.data);
     final files = data['data'] as List<dynamic>?;
     if (files != null && files.isNotEmpty) {
        final attrs = files.first['attributes'] as Map<String, dynamic>?;
        if (attrs != null) {
-         return {
-           'url': attrs['url']?.toString() ?? '',
-           'baseName': attrs['baseName']?.toString() ?? name,
-         };
+         return {'url': attrs['url']?.toString() ?? '', 'baseName': attrs['baseName']?.toString() ?? name};
        }
     }
     return null;
@@ -295,9 +217,7 @@ class ApiClient {
   Future<void> _saveAuth(String token, int? userId) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_tokenKey, token);
-    if (userId != null) {
-      await prefs.setInt(_userIdKey, userId);
-    }
+    if (userId != null) await prefs.setInt(_userIdKey, userId);
   }
 
   Map<String, dynamic> _asMap(dynamic data) {
