@@ -14,6 +14,8 @@ class ApiClient {
     baseUrl: baseUrl,
     connectTimeout: const Duration(seconds: 15),
     receiveTimeout: const Duration(seconds: 20),
+    // [核心修复1：追加发包超时熔断！一旦系统挂起导致底层 Socket 死亡，最多等待 15 秒强制释放 UI 锁，防止永久假死]
+    sendTimeout: const Duration(seconds: 15),
     headers: {
       'Content-Type': 'application/json',
       'Accept': 'application/json',
@@ -27,6 +29,10 @@ class ApiClient {
         }
         handler.next(options);
       },
+      // [核心修复2：底层错误拦截器。当息屏导致的网络连接被系统重置时，友好地向上层抛出异常而不是卡死]
+      onError: (DioException e, handler) {
+        handler.next(e);
+      }
     ));
   }
 
@@ -173,16 +179,10 @@ class ApiClient {
     return _asMap(response.data);
   }
 
-  // ==========================================
-  // [核心重构：全面接入扩展帖子操作 API]
-  // ==========================================
-
-  // 1. 删除帖子
   Future<void> deletePost(int postId) async {
     await _dio.delete('/api/posts/$postId');
   }
 
-  // 2. 编辑帖子
   Future<void> editPost(int postId, String content) async {
     await _dio.patch('/api/posts/$postId', data: {
       "data": {
@@ -193,7 +193,6 @@ class ApiClient {
     });
   }
 
-  // 3. 对用户发出警告 (支持 Flarum Warnings 扩展)
   Future<void> warnUser(int userId, int? postId, String reason) async {
     final Map<String, dynamic> data = {
       "data": {
@@ -217,7 +216,6 @@ class ApiClient {
     await _dio.post('/api/warnings', data: data);
   }
 
-  // 4. 打赏帖子 (兼容主流 Money/Tip 接口结构)
   Future<void> tipPost(int postId, int amount) async {
     await _dio.post('/api/posts/$postId/tip', data: {
       "data": {
@@ -226,7 +224,6 @@ class ApiClient {
     });
   }
 
-  // 5. 举报/标记
   Future<void> reportPost(int postId, String reason, String? detail) async {
     await _dio.post('/api/flags', data: {
       "data": {
@@ -243,8 +240,6 @@ class ApiClient {
       }
     });
   }
-
-  // ==========================================
 
   Future<void> likePost(int postId, bool isLiked) async {
     await _dio.patch('/api/posts/$postId', data: {
