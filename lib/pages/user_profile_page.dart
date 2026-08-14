@@ -1,6 +1,7 @@
 // 文件位置: lib/pages/user_profile_page.dart
 
 import 'package:flutter/material.dart';
+import 'package:dio/dio.dart';
 import 'package:xsop_forum/api/api_client.dart';
 import 'package:xsop_forum/models/flarum_models.dart';
 import 'package:xsop_forum/pages/user_activity_page.dart';
@@ -72,6 +73,74 @@ class _UserProfilePageState extends State<UserProfilePage> {
     );
   }
 
+  // [核心修复：完美对齐图 2 和图 3，针对目标用户调出全功能警告扣分面板]
+  Future<void> _showAdminWarnDialog() async {
+    final strikesCtrl = TextEditingController(text: '1');
+    final publicCtrl = TextEditingController();
+    final privateCtrl = TextEditingController();
+    bool isSubmitting = false;
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setStateDialog) => AlertDialog(
+          backgroundColor: Colors.white,
+          surfaceTintColor: Colors.transparent,
+          title: Text('警告 ${_currentUserData.username}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('严重程度：记几分？', style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 6),
+                TextField(controller: strikesCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(border: OutlineInputBorder(), isDense: true)),
+                const SizedBox(height: 16),
+                
+                const Text('用户批注。为什么警告？（批注对用户可见）', style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 6),
+                TextField(controller: publicCtrl, maxLines: 3, decoration: const InputDecoration(border: OutlineInputBorder())),
+                const SizedBox(height: 16),
+                
+                const Text('管理员备注。（备注仅对管理员可见）', style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 6),
+                TextField(controller: privateCtrl, maxLines: 3, decoration: const InputDecoration(border: OutlineInputBorder())),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消', style: TextStyle(color: Colors.grey))),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+              onPressed: isSubmitting ? null : () async {
+                setStateDialog(() => isSubmitting = true);
+                try {
+                  await widget.api.warnUser(
+                    int.parse(_currentUserData.id),
+                    strikes: int.tryParse(strikesCtrl.text) ?? 0,
+                    publicComment: publicCtrl.text.trim(),
+                    privateComment: privateCtrl.text.trim(),
+                  );
+                  if (mounted) {
+                    Navigator.pop(ctx);
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('处罚记录已下发！')));
+                  }
+                } on DioException catch (e) {
+                  String errMsg = '操作失败：您可能没有权限';
+                  if (e.response?.statusCode == 403) errMsg = '越权操作：当前账号无权对该用户下发警告';
+                  if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg)));
+                } finally {
+                  if (mounted) setStateDialog(() => isSubmitting = false);
+                }
+              },
+              child: isSubmitting ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('发送警告'),
+            )
+          ],
+        )
+      )
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -82,6 +151,21 @@ class _UserProfilePageState extends State<UserProfilePage> {
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         centerTitle: true,
+        actions: [
+          // [新增：查看他人主页时，显示“操作”下拉菜单]
+          if (!_isCurrentUser)
+            PopupMenuButton<String>(
+              icon: const Icon(Icons.more_vert, color: Colors.black87),
+              color: Colors.white,
+              surfaceTintColor: Colors.transparent,
+              onSelected: (val) {
+                if (val == 'warn') _showAdminWarnDialog();
+              },
+              itemBuilder: (context) => [
+                const PopupMenuItem(value: 'warn', child: Row(children: [Icon(Icons.warning_amber, color: Colors.redAccent, size: 20), SizedBox(width: 8), Text('站务警告', style: TextStyle(color: Colors.redAccent))])),
+              ],
+            )
+        ],
       ),
       body: RefreshIndicator(
         onRefresh: _refreshUserData,
@@ -118,20 +202,12 @@ class _UserProfilePageState extends State<UserProfilePage> {
                     ),
                     const SizedBox(height: 24),
 
+                    // [核心修复：化繁为简，将收发打赏与警告分别整合为单一的高级模块]
                     _buildSectionGroup(
-                      title: '打赏详情',
+                      title: '个人记录',
                       items: [
-                        _MenuItem(icon: Icons.card_giftcard, color: Colors.redAccent, title: '收到的打赏', onTap: () => _navigateToActivity('收到的打赏', 'tips_received')),
-                        _MenuItem(icon: Icons.outbox, color: Colors.pinkAccent, title: '发出的打赏', onTap: () => _navigateToActivity('发出的打赏', 'tips_sent')),
-                      ],
-                    ),
-                    const SizedBox(height: 24),
-
-                    _buildSectionGroup(
-                      title: '站务警告',
-                      items: [
-                        _MenuItem(icon: Icons.warning_amber_rounded, color: Colors.red, title: '收到的警告', onTap: () => _navigateToActivity('收到的警告', 'warnings_received')),
-                        _MenuItem(icon: Icons.gavel, color: Colors.brown, title: '发出的警告', onTap: () => _navigateToActivity('发出的警告', 'warnings_sent')),
+                        _MenuItem(icon: Icons.card_giftcard, color: Colors.orange, title: '打赏记录', onTap: () => _navigateToActivity('打赏记录', 'tips')),
+                        _MenuItem(icon: Icons.warning_amber_rounded, color: Colors.red, title: '站务警告', onTap: () => _navigateToActivity('站务警告', 'warnings')),
                       ],
                     ),
                     const SizedBox(height: 24),
@@ -209,7 +285,6 @@ class _UserProfilePageState extends State<UserProfilePage> {
     );
   }
 
-  // [严格对齐图 1 要求：深色胶囊仅保留点赞和资产]
   Widget _buildAssetPill() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
