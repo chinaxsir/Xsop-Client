@@ -3,6 +3,7 @@
 import 'package:flutter/material.dart';
 import 'package:xsop_forum/api/api_client.dart';
 import 'package:xsop_forum/models/flarum_models.dart';
+import 'package:xsop_forum/pages/user_activity_page.dart';
 
 class UserProfilePage extends StatefulWidget {
   final FlarumUser user;
@@ -20,32 +21,62 @@ class UserProfilePage extends StatefulWidget {
 
 class _UserProfilePageState extends State<UserProfilePage> {
   bool _isCurrentUser = false;
+  late FlarumUser _currentUserData;
+  bool _isRefreshing = false;
 
   @override
   void initState() {
     super.initState();
+    _currentUserData = widget.user;
     _checkIfCurrentUser();
+    _refreshUserData(); // 页面打开时，主动同步一次最新数据
   }
 
   Future<void> _checkIfCurrentUser() async {
     final currentUserId = await widget.api.getUserId();
     if (mounted) {
       setState(() {
-        _isCurrentUser = currentUserId != null && currentUserId.toString() == widget.user.id;
+        _isCurrentUser = currentUserId != null && currentUserId.toString() == _currentUserData.id;
       });
     }
   }
 
-  void _showComingSoon() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('该功能界面正在开发中...')),
+  // [核心增强：从服务器拉取当前用户的最新资产和徽章状态，确保与网页端实时同步]
+  Future<void> _refreshUserData() async {
+    if (_isRefreshing) return;
+    setState(() => _isRefreshing = true);
+    try {
+      final res = await widget.api.getUser(int.parse(_currentUserData.id));
+      if (mounted) {
+        setState(() {
+          _currentUserData = parseUser(res, widget.api.baseUrl);
+        });
+      }
+    } catch (e) {
+      // 忽略刷新错误，保持旧数据展示
+    } finally {
+      if (mounted) setState(() => _isRefreshing = false);
+    }
+  }
+
+  void _navigateToActivity(String title, String type) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => UserActivityPage(
+          api: widget.api,
+          user: _currentUserData,
+          title: title,
+          activityType: type,
+        ),
+      ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF2F2F7), // iOS 风格的底层灰
+      backgroundColor: const Color(0xFFF2F2F7),
       appBar: AppBar(
         title: const Text('个人中心', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
         backgroundColor: Colors.white,
@@ -53,116 +84,116 @@ class _UserProfilePageState extends State<UserProfilePage> {
         elevation: 0,
         centerTitle: true,
       ),
-      body: CustomScrollView(
-        slivers: [
-          // 头部个人信息卡片
-          SliverToBoxAdapter(
-            child: Container(
-              color: Colors.white,
-              padding: const EdgeInsets.only(top: 24, bottom: 32),
-              child: Column(
-                children: [
-                  _buildAvatar(),
-                  const SizedBox(height: 16),
-                  _buildUserInfo(),
-                  const SizedBox(height: 16),
-                  _buildAssetPill(),
-                ],
+      body: RefreshIndicator(
+        onRefresh: _refreshUserData,
+        child: CustomScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          slivers: [
+            SliverToBoxAdapter(
+              child: Container(
+                color: Colors.white,
+                padding: const EdgeInsets.only(top: 24, bottom: 32),
+                child: Column(
+                  children: [
+                    _buildAvatar(),
+                    const SizedBox(height: 16),
+                    _buildUserInfo(),
+                    const SizedBox(height: 16),
+                    _buildAssetPill(),
+                  ],
+                ),
               ),
             ),
-          ),
-          
-          // 列表区域
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 20.0),
-              child: Column(
-                children: [
-                  _buildSectionGroup(
-                    title: '论坛交流',
-                    items: [
-                      _MenuItem(icon: Icons.article_outlined, color: Colors.blueAccent, title: '发布的主题', onTap: _showComingSoon),
-                      _MenuItem(icon: Icons.chat_bubble_outline, color: Colors.lightBlue, title: '我的回复', onTap: _showComingSoon),
-                    ],
-                  ),
-                  const SizedBox(height: 24),
-                  
-                  _buildSectionGroup(
-                    title: '个人资产',
-                    items: [
-                      _MenuItem(icon: Icons.thumb_up_alt_outlined, color: Colors.orange, title: '收到的点赞', trailingText: widget.user.likesReceived, onTap: _showComingSoon),
-                      _MenuItem(icon: Icons.account_balance_wallet_outlined, color: Colors.amber, title: 'XSD 余额', trailingText: '${widget.user.money} XSD', onTap: _showComingSoon),
-                    ],
-                  ),
-                  const SizedBox(height: 24),
-
-                  _buildSectionGroup(
-                    title: '打赏详情',
-                    items: [
-                      _MenuItem(icon: Icons.card_giftcard, color: Colors.redAccent, title: '收到的打赏', onTap: _showComingSoon),
-                      _MenuItem(icon: Icons.outbox, color: Colors.pinkAccent, title: '发出的打赏', onTap: _showComingSoon),
-                    ],
-                  ),
-                  const SizedBox(height: 24),
-
-                  _buildSectionGroup(
-                    title: '站务警告',
-                    items: [
-                      _MenuItem(icon: Icons.warning_amber_rounded, color: Colors.red, title: '收到的警告', onTap: _showComingSoon),
-                      // 仅针对管理层或特定需求展示“发出的警告”
-                      _MenuItem(icon: Icons.gavel, color: Colors.brown, title: '发出的警告', onTap: _showComingSoon),
-                    ],
-                  ),
-                  const SizedBox(height: 24),
-
-                  // 仅当前用户本人可见的设置项
-                  if (_isCurrentUser)
+            
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 20.0),
+                child: Column(
+                  children: [
                     _buildSectionGroup(
-                      title: '系统设置',
+                      title: '论坛交流',
                       items: [
-                        _MenuItem(icon: Icons.settings_outlined, color: Colors.grey.shade700, title: '账号设置', onTap: _showComingSoon),
-                        _MenuItem(
-                          icon: Icons.exit_to_app, 
-                          color: Colors.red, 
-                          title: '退出登录', 
-                          textColor: Colors.red,
-                          hideArrow: true,
-                          onTap: () async {
-                            await widget.api.logout();
-                            if (mounted) {
-                              Navigator.of(context).popUntil((route) => route.isFirst);
-                            }
-                          },
-                        ),
+                        _MenuItem(icon: Icons.article_outlined, color: Colors.blueAccent, title: '发布的主题', onTap: () => _navigateToActivity('发布的主题', 'discussions')),
+                        _MenuItem(icon: Icons.chat_bubble_outline, color: Colors.lightBlue, title: '我的回复', onTap: () => _navigateToActivity('我的回复', 'posts')),
                       ],
                     ),
-                  
-                  const SizedBox(height: 40), // 底部留白
-                ],
+                    const SizedBox(height: 24),
+                    
+                    _buildSectionGroup(
+                      title: '个人资产',
+                      items: [
+                        _MenuItem(icon: Icons.thumb_up_alt_outlined, color: Colors.orange, title: '收到的点赞', trailingText: _currentUserData.likesReceived, hideArrow: true, onTap: () {}),
+                        _MenuItem(icon: Icons.account_balance_wallet_outlined, color: Colors.amber, title: 'XSD 余额', trailingText: '${_currentUserData.money} XSD', hideArrow: true, onTap: () {}),
+                      ],
+                    ),
+                    const SizedBox(height: 24),
+
+                    _buildSectionGroup(
+                      title: '打赏详情',
+                      items: [
+                        _MenuItem(icon: Icons.card_giftcard, color: Colors.redAccent, title: '收到的打赏', onTap: () => _navigateToActivity('收到的打赏', 'tips_received')),
+                        _MenuItem(icon: Icons.outbox, color: Colors.pinkAccent, title: '发出的打赏', onTap: () => _navigateToActivity('发出的打赏', 'tips_sent')),
+                      ],
+                    ),
+                    const SizedBox(height: 24),
+
+                    _buildSectionGroup(
+                      title: '站务警告',
+                      items: [
+                        _MenuItem(icon: Icons.warning_amber_rounded, color: Colors.red, title: '收到的警告', onTap: () => _navigateToActivity('收到的警告', 'warnings_received')),
+                        _MenuItem(icon: Icons.gavel, color: Colors.brown, title: '发出的警告', onTap: () => _navigateToActivity('发出的警告', 'warnings_sent')),
+                      ],
+                    ),
+                    const SizedBox(height: 24),
+
+                    if (_isCurrentUser)
+                      _buildSectionGroup(
+                        title: '系统设置',
+                        items: [
+                          _MenuItem(icon: Icons.settings_outlined, color: Colors.grey.shade700, title: '账号设置', onTap: () {
+                             ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请前往网页版进行账号核心安全设置')));
+                          }),
+                          _MenuItem(
+                            icon: Icons.exit_to_app, 
+                            color: Colors.red, 
+                            title: '退出登录', 
+                            textColor: Colors.red,
+                            hideArrow: true,
+                            onTap: () async {
+                              await widget.api.logout();
+                              if (mounted) {
+                                Navigator.of(context).popUntil((route) => route.isFirst);
+                              }
+                            },
+                          ),
+                        ],
+                      ),
+                    
+                    const SizedBox(height: 40),
+                  ],
+                ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
 
-  // 构建头像
   Widget _buildAvatar() {
-    final name = widget.user.displayName.isNotEmpty ? widget.user.displayName : widget.user.username;
+    final name = _currentUserData.displayName.isNotEmpty ? _currentUserData.displayName : _currentUserData.username;
     final letter = name.isNotEmpty ? name[0].toUpperCase() : '?';
 
     return CircleAvatar(
       radius: 46,
       backgroundColor: Colors.grey.shade200,
-      backgroundImage: widget.user.avatarUrl != null ? NetworkImage(widget.user.avatarUrl!) : null,
-      child: widget.user.avatarUrl == null
+      backgroundImage: _currentUserData.avatarUrl != null ? NetworkImage(_currentUserData.avatarUrl!) : null,
+      child: _currentUserData.avatarUrl == null
           ? Text(letter, style: TextStyle(fontSize: 32, color: Theme.of(context).colorScheme.primary, fontWeight: FontWeight.bold))
           : null,
     );
   }
 
-  // 构建用户信息（昵称、用户名、徽章）
   Widget _buildUserInfo() {
     return Column(
       children: [
@@ -170,30 +201,29 @@ class _UserProfilePageState extends State<UserProfilePage> {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Text(
-              widget.user.displayName.isNotEmpty ? widget.user.displayName : widget.user.username,
+              _currentUserData.displayName.isNotEmpty ? _currentUserData.displayName : _currentUserData.username,
               style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.black87),
             ),
-            if (widget.user.groups.isNotEmpty) ...[
+            if (_currentUserData.groups.isNotEmpty) ...[
               const SizedBox(width: 8),
-              buildUserBadges(widget.user.groups),
+              buildUserBadges(_currentUserData.groups),
             ]
           ],
         ),
         const SizedBox(height: 4),
         Text(
-          '@${widget.user.username}',
+          '@${_currentUserData.username}',
           style: TextStyle(fontSize: 14, color: Colors.grey.shade500),
         ),
       ],
     );
   }
 
-  // 构建资产胶囊（完美还原图片中的深色块 UI）
   Widget _buildAssetPill() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       decoration: BoxDecoration(
-        color: const Color(0xFF4A4A4A), // 深灰色底
+        color: const Color(0xFF4A4A4A),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Row(
@@ -201,21 +231,20 @@ class _UserProfilePageState extends State<UserProfilePage> {
         children: [
           const Icon(Icons.workspace_premium, size: 14, color: Colors.white),
           const SizedBox(width: 4),
-          Text(widget.user.badgesCount, style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+          Text(_currentUserData.badgesCount, style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
           const SizedBox(width: 12),
           
           const Icon(Icons.thumb_up, size: 14, color: Colors.orangeAccent),
           const SizedBox(width: 4),
-          Text(widget.user.likesReceived, style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+          Text(_currentUserData.likesReceived, style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
           const SizedBox(width: 12),
           
-          Text('${widget.user.money} XSD', style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+          Text('${_currentUserData.money} XSD', style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
         ],
       ),
     );
   }
 
-  // 构建分组卡片
   Widget _buildSectionGroup({required String title, required List<_MenuItem> items}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -273,7 +302,6 @@ class _UserProfilePageState extends State<UserProfilePage> {
   }
 }
 
-// 菜单项数据模型
 class _MenuItem {
   final IconData icon;
   final Color color;
