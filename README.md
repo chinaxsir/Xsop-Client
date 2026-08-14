@@ -5,8 +5,6 @@
 
 ```
 XSOP-Forum/
-├── .github/workflows/
-│   └── build_ios.yml          # GitHub Actions 云构建
 ├── lib/
 │   ├── api/
 │   │   └── api_client.dart    # API 客户端
