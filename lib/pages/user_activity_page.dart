@@ -29,15 +29,28 @@ class _UserActivityPageState extends State<UserActivityPage> {
   bool _isLoading = true;
   String? _error;
   List<dynamic> _items = [];
-  List<dynamic> _included = []; // 核心：用于存储并解析被关联进来的主题名称和用户信息
-  
-  // 用于优雅展示空数据的提示文案
+  List<dynamic> _included = [];
   String _customEmptyMessage = '空空如也';
 
   @override
   void initState() {
     super.initState();
     _loadData();
+  }
+
+  // [核心修复 2：API 智能回退引擎。自动尝试多个插件接口，彻底解决 404 导致的数据丢失]
+  Future<Map<String, dynamic>> _fetchWithFallback(List<String> endpoints, Map<String, dynamic> query) async {
+    for (int i = 0; i < endpoints.length; i++) {
+      try {
+        return await widget.api.getDynamicList(endpoints[i], queryParameters: query);
+      } on DioException catch (e) {
+        if (e.response?.statusCode == 404 && i < endpoints.length - 1) {
+          continue; // 当前接口 404 不存在，尝试下一个备用接口
+        }
+        rethrow;
+      }
+    }
+    throw Exception("未找到有效的数据接口");
   }
 
   Future<void> _loadData() async {
@@ -55,7 +68,6 @@ class _UserActivityPageState extends State<UserActivityPage> {
           _customEmptyMessage = '该用户暂未发布任何主题。';
           break;
         case 'posts':
-          // [核心修复：增加 include=discussion，让 APP 能获取到回复所在的真实帖子标题]
           res = await widget.api.getDynamicList('/api/posts', queryParameters: {
             'filter[user]': widget.user.id,
             'include': 'discussion'
@@ -63,24 +75,26 @@ class _UserActivityPageState extends State<UserActivityPage> {
           _customEmptyMessage = '该用户暂未发表任何回复。';
           break;
         case 'warnings_received':
-          res = await widget.api.getDynamicList('/api/warnings', queryParameters: {'filter[user]': widget.user.id});
+          res = await _fetchWithFallback(['/api/warnings', '/api/user-warnings'], {'filter[user]': widget.user.id});
           _customEmptyMessage = '该用户暂未收到任何警告。';
           break;
         case 'warnings_sent':
-          res = await widget.api.getDynamicList('/api/warnings', queryParameters: {'filter[addedByUser]': widget.user.id});
+          res = await _fetchWithFallback(['/api/warnings', '/api/user-warnings'], {'filter[addedByUser]': widget.user.id});
           _customEmptyMessage = '该用户暂未发出任何警告。';
           break;
         case 'tips_received':
-          // 尽最大可能获取发送者信息
-          res = await widget.api.getDynamicList('/api/tips', queryParameters: {
+          // 覆盖目前主流的三款打赏插件的 API 路径
+          res = await _fetchWithFallback(['/api/rewards', '/api/tips', '/api/money-transfers'], {
             'filter[recipient]': widget.user.id,
+            'filter[user]': widget.user.id,
             'include': 'sender,recipient'
           });
           _customEmptyMessage = '暂无收到的打赏记录。';
           break;
         case 'tips_sent':
-          res = await widget.api.getDynamicList('/api/tips', queryParameters: {
+          res = await _fetchWithFallback(['/api/rewards', '/api/tips', '/api/money-transfers'], {
             'filter[sender]': widget.user.id,
+            'filter[user]': widget.user.id,
             'include': 'sender,recipient'
           });
           _customEmptyMessage = '暂无发出的打赏记录。';
@@ -99,11 +113,9 @@ class _UserActivityPageState extends State<UserActivityPage> {
     } on DioException catch (e) {
       if (mounted) {
         setState(() {
-          // [核心修复：优雅拦截 404 (插件未安装) 或数据为空的情况，不再显示裂开的图标]
           if (e.response?.statusCode == 404) {
              _items = []; 
              _error = null; 
-             _customEmptyMessage = '未开启该功能或暂无数据 (404)';
           } else if (e.response?.statusCode == 403) {
              _error = '权限不足：您无法查看此详情';
           } else {
@@ -147,7 +159,6 @@ class _UserActivityPageState extends State<UserActivityPage> {
       return const Center(child: CircularProgressIndicator());
     }
     
-    // 网络等硬核错误提示
     if (_error != null) {
       return Center(
         child: Column(
@@ -163,7 +174,6 @@ class _UserActivityPageState extends State<UserActivityPage> {
       );
     }
     
-    // [核心修复：完美对齐网页版的空数据占位符展示]
     if (_items.isEmpty) {
       return CustomScrollView(
         physics: const AlwaysScrollableScrollPhysics(),
@@ -197,7 +207,6 @@ class _UserActivityPageState extends State<UserActivityPage> {
     );
   }
 
-  // 动态渲染不同类型的列表项
   Widget _buildListItem(Map<String, dynamic> item) {
     final attrs = item['attributes'] ?? {};
     final type = item['type'];
@@ -215,7 +224,6 @@ class _UserActivityPageState extends State<UserActivityPage> {
       title = attrs['title'] ?? '无标题';
       subtitle = '发布于 $timeDisplay';
     } else if (type == 'posts') {
-      // [核心修复：解析并拼接帖子真实标题]
       String discussionTitle = '未知主题';
       final discussionId = attrs['discussionId']?.toString() ?? item['relationships']?['discussion']?['data']?['id']?.toString();
       if (discussionId != null) {
@@ -232,8 +240,7 @@ class _UserActivityPageState extends State<UserActivityPage> {
       badgeText = '警告';
       badgeColor = Colors.red;
       subtitle = '记录于 $timeDisplay';
-    } else if (type == 'tips' || type == 'money_transfers' || type == 'transactions') {
-      // [核心修复：适配类似 "10 XSD 来自 xx 给 xx" 的网页版打赏UI]
+    } else if (type == 'tips' || type == 'rewards' || type == 'money_transfers') {
       final amount = attrs['amount']?.toString() ?? '0';
       badgeText = '$amount XSD';
       badgeColor = Colors.orange;
