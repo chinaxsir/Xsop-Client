@@ -4,50 +4,62 @@ import 'package:flutter/material.dart';
 import 'package:xsop_forum/api/api_client.dart';
 import 'package:xsop_forum/pages/home_page.dart' show formatRelativeTime;
 
-// [修改备注：新增全局的通知中心页面]
 class NotificationsPage extends StatefulWidget {
   final ApiClient api;
-
   const NotificationsPage({super.key, required this.api});
 
   @override
   State<NotificationsPage> createState() => _NotificationsPageState();
 }
 
-class _NotificationsPageState extends State<NotificationsPage> {
+// [核心修复 1：混入 WidgetsBindingObserver 监听系统生命周期]
+class _NotificationsPageState extends State<NotificationsPage> with WidgetsBindingObserver {
   bool _isLoading = true;
   String? _error;
   List<dynamic> _notifications = [];
-  Map<String, dynamic> _usersMap = {};
 
   @override
   void initState() {
     super.initState();
-    _loadNotifications();
+    WidgetsBinding.instance.addObserver(this); // 注册监听
+    _loadData();
   }
 
-  Future<void> _loadNotifications() async {
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this); // 销毁监听
+    super.dispose();
+  }
+
+  // [核心修复 2：感知到系统唤醒，立刻静默重新拉取数据，修复网络死锁]
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _loadData(silent: true);
+    }
+  }
+
+  Future<void> _loadData({bool silent = false}) async {
+    if (!silent) {
+      setState(() {
+        _isLoading = true;
+        _error = null;
+      });
+    }
+    
     try {
       final res = await widget.api.getNotifications();
       final data = res['data'] as List<dynamic>? ?? [];
-      final included = res['included'] as List<dynamic>? ?? [];
       
-      final Map<String, dynamic> users = {};
-      for (var item in included) {
-        if (item['type'] == 'users') {
-          users[item['id']] = item;
-        }
-      }
-
       if (mounted) {
         setState(() {
           _notifications = data;
-          _usersMap = users;
           _isLoading = false;
+          _error = null;
         });
       }
     } catch (e) {
-      if (mounted) {
+      if (mounted && !silent) {
         setState(() {
           _error = '无法加载通知，请检查网络';
           _isLoading = false;
@@ -61,15 +73,18 @@ class _NotificationsPageState extends State<NotificationsPage> {
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
-        title: const Text('通知中心', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
         backgroundColor: Colors.white,
         surfaceTintColor: Colors.transparent,
+        title: const Text('通知中心', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(0.5),
           child: Container(color: const Color(0xFFE5E5EA), height: 0.5),
         ),
       ),
-      body: _buildBody(),
+      body: RefreshIndicator(
+        onRefresh: () => _loadData(),
+        child: _buildBody(),
+      ),
     );
   }
 
@@ -77,98 +92,64 @@ class _NotificationsPageState extends State<NotificationsPage> {
     if (_isLoading) {
       return const Center(child: CircularProgressIndicator());
     }
+    
+    // [核心修复 3：废弃原本死板的文本报错，换为带刷新按钮的优雅挽救界面]
     if (_error != null) {
-      return Center(child: Text(_error!));
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.wifi_off, size: 56, color: Colors.grey.shade300),
+            const SizedBox(height: 16),
+            Text(_error!, style: TextStyle(color: Colors.grey.shade500, fontSize: 14)),
+            const SizedBox(height: 16),
+            FilledButton.tonal(
+              onPressed: () => _loadData(),
+              child: const Text('点击重试')
+            ),
+          ],
+        ),
+      );
     }
+    
     if (_notifications.isEmpty) {
-      return const Center(child: Text('暂无新通知', style: TextStyle(color: Colors.grey)));
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.notifications_none, size: 56, color: Colors.grey.shade300),
+            const SizedBox(height: 16),
+            Text('暂无新通知', style: TextStyle(color: Colors.grey.shade400, fontSize: 14)),
+          ],
+        ),
+      );
     }
-
+    
     return ListView.separated(
       itemCount: _notifications.length,
-      separatorBuilder: (_, __) => const Divider(height: 1, indent: 72, thickness: 0.5, color: Color(0xFFE5E5EA)),
+      separatorBuilder: (_, __) => const Divider(height: 1, thickness: 0.5, color: Color(0xFFE5E5EA)),
       itemBuilder: (context, index) {
-        final notice = _notifications[index];
-        final attrs = notice['attributes'] ?? {};
-        final rels = notice['relationships'] ?? {};
+        final notif = _notifications[index];
+        final attrs = notif['attributes'] ?? {};
+        final contentType = attrs['contentType'] ?? '系统通知';
+        final timeStr = attrs['createdAt'];
         
-        final fromUserId = rels['fromUser']?['data']?['id'];
-        final fromUser = fromUserId != null ? _usersMap[fromUserId] : null;
-        
-        final username = fromUser?['attributes']?['displayName'] ?? fromUser?['attributes']?['username'] ?? '某人';
-        final avatarUrl = fromUser?['attributes']?['avatarUrl'];
-        
-        final contentType = attrs['contentType'] as String? ?? '未知';
-        final isRead = attrs['isRead'] == true;
-        final timeStr = attrs['createdAt'] as String?;
-        final time = timeStr != null ? DateTime.tryParse(timeStr) : null;
-        
-        String actionText = '与你进行了互动';
-        IconData actionIcon = Icons.notifications;
-        Color iconColor = Colors.grey;
-
-        if (contentType == 'postLiked') {
-          actionText = '赞了你的帖子';
-          actionIcon = Icons.thumb_up;
-          iconColor = Colors.blue;
-        } else if (contentType == 'postMentioned') {
-          actionText = '在回复中提到了你';
-          actionIcon = Icons.reply;
-          iconColor = Colors.green;
-        } else if (contentType == 'userMentioned') {
-          actionText = '提到了你';
-          actionIcon = Icons.alternate_email;
-          iconColor = Colors.orange;
-        } else if (contentType == 'newPost') {
-          actionText = '发布了新回复';
-          actionIcon = Icons.chat_bubble_outline;
-          iconColor = Colors.purple;
-        }
-
-        return Container(
-          color: isRead ? Colors.white : Colors.blue.withOpacity(0.03),
-          child: ListTile(
-            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            leading: Stack(
-              children: [
-                CircleAvatar(
-                  radius: 20,
-                  backgroundColor: Colors.grey.shade100,
-                  backgroundImage: avatarUrl != null ? NetworkImage(widget.api.baseUrl + avatarUrl.replaceAll(widget.api.baseUrl, '')) : null,
-                  child: avatarUrl == null ? const Icon(Icons.person, color: Colors.grey) : null,
-                ),
-                Positioned(
-                  right: 0,
-                  bottom: 0,
-                  child: Container(
-                    padding: const EdgeInsets.all(3),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      shape: BoxShape.circle,
-                      border: Border.all(color: Colors.white, width: 1.5),
-                    ),
-                    child: Icon(actionIcon, size: 10, color: iconColor),
-                  ),
-                ),
-              ],
-            ),
-            title: RichText(
-              text: TextSpan(
-                style: const TextStyle(color: Colors.black87, fontSize: 14),
-                children: [
-                  TextSpan(text: username, style: const TextStyle(fontWeight: FontWeight.bold)),
-                  TextSpan(text: ' $actionText'),
-                ],
-              ),
-            ),
-            subtitle: Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Text(
-                time != null ? formatRelativeTime(time) : '',
-                style: TextStyle(color: Colors.grey.shade500, fontSize: 12),
-              ),
-            ),
+        return ListTile(
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+          leading: CircleAvatar(
+            backgroundColor: Colors.blue.shade50,
+            child: Icon(Icons.notifications, color: Theme.of(context).colorScheme.primary, size: 20),
           ),
+          title: Text(contentType, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
+          subtitle: timeStr != null 
+              ? Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(formatRelativeTime(DateTime.parse(timeStr)), style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
+                )
+              : null,
+          onTap: () {
+            // 后续可在这里添加点击通知跳转逻辑
+          },
         );
       },
     );
