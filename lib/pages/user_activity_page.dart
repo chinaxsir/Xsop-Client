@@ -38,7 +38,6 @@ class _UserActivityPageState extends State<UserActivityPage> {
     _loadData();
   }
 
-  // [暴力容错引擎] 自动尝试带有完整 Include 的 API 路径，如果遭遇 400 则自动降级重试并在本地进行数据清洗。
   Future<Map<String, dynamic>> _robustFetch(List<String> endpoints, Map<String, dynamic> query, String includes) async {
     for (final ep in endpoints) {
       try {
@@ -48,7 +47,6 @@ class _UserActivityPageState extends State<UserActivityPage> {
       } on DioException catch (e) {
         if (e.response?.statusCode == 404) continue; 
         if (e.response?.statusCode == 400 || e.response?.statusCode == 500) {
-           // 如果服务器不支持某些关联或过滤参数，去掉复杂参数保底重试
            try {
              return await widget.api.getDynamicList(ep, queryParameters: query);
            } catch (_) {
@@ -59,7 +57,6 @@ class _UserActivityPageState extends State<UserActivityPage> {
         }
       }
     }
-    // 全部失败则抛出 404，由外层接管展示完美的“空数据”提示
     throw DioException(
       requestOptions: RequestOptions(path: ''),
       response: Response(requestOptions: RequestOptions(path: ''), statusCode: 404),
@@ -70,17 +67,18 @@ class _UserActivityPageState extends State<UserActivityPage> {
     final rawItems = res['data'] as List<dynamic>? ?? [];
     _included = res['included'] as List<dynamic>? ?? [];
 
-    // 本地终极清洗：确保就算服务器忽略了过滤参数，客户端依然只显示正确的数据
-    if (widget.activityType == 'warnings_sent') {
-       _items = rawItems.where((i) => i['relationships']?['addedByUser']?['data']?['id']?.toString() == widget.user.id).toList();
-    } else if (widget.activityType == 'warnings_received') {
-       _items = rawItems.where((i) => i['relationships']?['user']?['data']?['id']?.toString() == widget.user.id).toList();
-    } else if (widget.activityType == 'tips_sent') {
-       _items = rawItems.where((i) => i['relationships']?['sender']?['data']?['id']?.toString() == widget.user.id).toList();
-    } else if (widget.activityType == 'tips_received') {
-       _items = rawItems.where((i) => i['relationships']?['recipient']?['data']?['id']?.toString() == widget.user.id).toList();
+    // [核心修复：利用 filter[user] 一次性拉取用户所有的相关流水（发出和收到），并在本地剔除无关垃圾数据]
+    if (widget.activityType == 'warnings') {
+       _items = rawItems.where((i) => i['relationships']?['user']?['data']?['id']?.toString() == widget.user.id || i['relationships']?['addedByUser']?['data']?['id']?.toString() == widget.user.id).toList();
+    } else if (widget.activityType == 'tips') {
+       _items = rawItems.where((i) => i['relationships']?['recipient']?['data']?['id']?.toString() == widget.user.id || i['relationships']?['sender']?['data']?['id']?.toString() == widget.user.id).toList();
     } else {
        _items = rawItems;
+    }
+    
+    // 如果没有数据抛异常由下层接管
+    if (_items.isEmpty) {
+        throw DioException(requestOptions: RequestOptions(path: ''), response: Response(requestOptions: RequestOptions(path: ''), statusCode: 404));
     }
   }
 
@@ -92,42 +90,33 @@ class _UserActivityPageState extends State<UserActivityPage> {
         case 'discussions':
           res = await widget.api.getDynamicList('/api/discussions', queryParameters: {'filter[q]': 'author:${widget.user.username}'});
           _customEmptyMessage = '该用户暂未发布任何主题。';
+          _filterAndSetData(res);
           break;
         case 'posts':
           res = await widget.api.getDynamicList('/api/posts', queryParameters: {'filter[user]': widget.user.id, 'include': 'discussion'});
           _customEmptyMessage = '该用户暂未发表任何回复。';
+          _filterAndSetData(res);
           break;
-        case 'warnings_received':
+        case 'warnings':
           res = await _robustFetch(['/api/warnings', '/api/user-warnings'], {'filter[user]': widget.user.id}, 'addedByUser,post,post.discussion');
           _customEmptyMessage = '该用户暂未收到任何警告。';
+          _filterAndSetData(res);
           break;
-        case 'warnings_sent':
-          res = await _robustFetch(['/api/warnings', '/api/user-warnings'], {'filter[addedByUser]': widget.user.id}, 'user,post,post.discussion');
-          _customEmptyMessage = '该用户暂未发出任何警告。';
-          break;
-        case 'tips_received':
-          res = await _robustFetch(['/api/tips', '/api/rewards', '/api/moneyHistory', '/api/money-transfers'], {'filter[recipient]': widget.user.id}, 'sender,recipient,post,post.discussion');
-          _customEmptyMessage = '暂无收到的打赏记录。';
-          break;
-        case 'tips_sent':
-          res = await _robustFetch(['/api/tips', '/api/rewards', '/api/moneyHistory', '/api/money-transfers'], {'filter[sender]': widget.user.id}, 'sender,recipient,post,post.discussion');
-          _customEmptyMessage = '暂无发出的打赏记录。';
+        case 'tips':
+          res = await _robustFetch(['/api/tips', '/api/rewards', '/api/moneyHistory', '/api/money-transfers'], {'filter[user]': widget.user.id}, 'sender,recipient,post,post.discussion');
+          _customEmptyMessage = '该用户暂无任何打赏记录。';
+          _filterAndSetData(res);
           break;
         default:
           throw Exception('未知的活动类型');
       }
+      if (mounted) setState(() => _isLoading = false);
       
-      if (mounted) {
-        setState(() {
-          _filterAndSetData(res);
-          _isLoading = false;
-        });
-      }
     } on DioException catch (e) {
       if (mounted) {
         setState(() {
           if (e.response?.statusCode == 404) {
-             _items = []; _error = null; // 优雅空占位
+             _items = []; _error = null; 
           } else if (e.response?.statusCode == 403) {
              _error = '权限不足：您无法查看此详情';
           } else {
@@ -141,7 +130,6 @@ class _UserActivityPageState extends State<UserActivityPage> {
     }
   }
 
-  // 从 included 中快速捞取关联数据
   Map<String, dynamic>? _getIncluded(String type, String? id) {
     if (id == null) return null;
     try {
@@ -187,7 +175,6 @@ class _UserActivityPageState extends State<UserActivityPage> {
       );
     }
     
-    // 完美复刻网页版空数据占位符
     if (_items.isEmpty) {
       return CustomScrollView(
         physics: const AlwaysScrollableScrollPhysics(),
@@ -213,7 +200,7 @@ class _UserActivityPageState extends State<UserActivityPage> {
       physics: const AlwaysScrollableScrollPhysics(),
       itemCount: _items.length,
       padding: const EdgeInsets.symmetric(vertical: 12),
-      separatorBuilder: (_, __) => const SizedBox(height: 8),
+      separatorBuilder: (_, __) => const SizedBox(height: 16),
       itemBuilder: (context, index) {
         final item = _items[index];
         final type = item['type'];
@@ -227,7 +214,7 @@ class _UserActivityPageState extends State<UserActivityPage> {
     );
   }
 
-  // [完美还原图 1] 站务警告专属精美卡片
+  // [完美还原图 1] 站务警告专属卡片：浅灰色大背景、头像名字穿插排版
   Widget _buildWarningItem(Map<String, dynamic> item) {
     final attrs = item['attributes'] ?? {};
     
@@ -248,59 +235,56 @@ class _UserActivityPageState extends State<UserActivityPage> {
     final timeDisplay = timeStr != null ? formatRelativeTime(DateTime.parse(timeStr)) : '未知时间';
 
     return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      margin: const EdgeInsets.symmetric(horizontal: 16),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border.all(color: Colors.lightBlue.shade200, width: 2), // 网页版蓝色描边
-        borderRadius: BorderRadius.circular(4),
+        color: const Color(0xFFF4F6F8), // 网页版淡淡的浅蓝灰底色
+        borderRadius: BorderRadius.circular(8),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('站务警告', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.black87)),
-          Divider(height: 24, color: Colors.grey.shade200),
           Row(
             children: [
-              CircleAvatar(radius: 12, backgroundColor: Colors.grey.shade200, backgroundImage: adminAvatar != null ? NetworkImage(adminAvatar) : null, child: adminAvatar == null ? const Icon(Icons.person, size: 14) : null),
+              CircleAvatar(radius: 12, backgroundColor: Colors.grey.shade200, backgroundImage: adminAvatar != null ? NetworkImage(adminAvatar) : null, child: adminAvatar == null ? Icon(Icons.person, size: 14, color: Theme.of(context).colorScheme.primary) : null),
               const SizedBox(width: 8),
-              Text(adminName, style: const TextStyle(color: Colors.blue, fontWeight: FontWeight.w500)),
+              Text(adminName, style: const TextStyle(color: Colors.blue, fontWeight: FontWeight.w500, fontSize: 14)),
             ],
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 8),
           Text('记$strikes分, $timeDisplay', style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
-          const SizedBox(height: 16),
           
-          Text('关联帖子', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.grey.shade700)),
-          const SizedBox(height: 6),
+          const SizedBox(height: 16),
+          Text('关联帖子', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.grey.shade600)),
+          const SizedBox(height: 8),
           Container(
             width: double.infinity,
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(color: Colors.grey.shade50, borderRadius: BorderRadius.circular(6), border: Border.all(color: Colors.grey.shade200)),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(6), border: Border.all(color: Colors.grey.shade200)),
             child: Row(
               children: [
-                const Icon(Icons.chat, size: 16, color: Colors.blue),
+                const Icon(Icons.chat, size: 18, color: Colors.blueAccent),
                 const SizedBox(width: 8),
-                Expanded(child: Text(discussionTitle, style: const TextStyle(color: Colors.black87, fontWeight: FontWeight.w500), overflow: TextOverflow.ellipsis)),
+                Expanded(child: Text(discussionTitle, style: const TextStyle(color: Colors.black87, fontWeight: FontWeight.w500, fontSize: 14), overflow: TextOverflow.ellipsis)),
               ],
             ),
           ),
+          
           const SizedBox(height: 16),
-
-          Text('警告', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.grey.shade700)),
-          const SizedBox(height: 6),
+          Text('警告', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.grey.shade600)),
+          const SizedBox(height: 8),
           Container(
             width: double.infinity,
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(color: Colors.grey.shade50, borderRadius: BorderRadius.circular(6), border: Border.all(color: Colors.grey.shade200)),
-            child: Text(comment, style: const TextStyle(color: Colors.black87)),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(6), border: Border.all(color: Colors.grey.shade200)),
+            child: Text(comment, style: const TextStyle(color: Colors.black87, fontSize: 14)),
           ),
         ],
       ),
     );
   }
 
-  // [完美还原图 4 & 图 7] 打赏专属精美卡片（支持头像穿插排版）
+  // [完美还原图 4 - 7] 打赏专属卡片：显示发送人/接收人头像与资金流向
   Widget _buildTipItem(Map<String, dynamic> item) {
     final attrs = item['attributes'] ?? {};
     
@@ -327,12 +311,12 @@ class _UserActivityPageState extends State<UserActivityPage> {
     final discussionTitle = discussion?['attributes']?['title'] ?? '未知主题';
 
     return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+      margin: const EdgeInsets.symmetric(horizontal: 16),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
-        border: Border.all(color: Colors.blue.shade300, width: 1.5), // 网页版蓝色浅描边
-        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: Colors.grey.shade200, width: 1.5), 
+        borderRadius: BorderRadius.circular(8),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -340,28 +324,29 @@ class _UserActivityPageState extends State<UserActivityPage> {
           Wrap(
             crossAxisAlignment: WrapCrossAlignment.center,
             spacing: 6,
-            runSpacing: 6,
+            runSpacing: 8,
             children: [
               Icon(Icons.card_giftcard, size: 16, color: Colors.grey.shade600),
               Text(timeDisplay, style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
-              const SizedBox(width: 4),
+              const SizedBox(width: 8),
               Text('$amount XSD', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.black87)),
+              const SizedBox(width: 8),
               Text('来自', style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
               CircleAvatar(radius: 10, backgroundColor: Colors.grey.shade200, backgroundImage: senderAvatar != null ? NetworkImage(senderAvatar) : null),
-              Text(senderName, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: Colors.black87)),
+              Text(senderName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.black87)),
               Text('给', style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
               CircleAvatar(radius: 10, backgroundColor: Colors.grey.shade200, backgroundImage: recipientAvatar != null ? NetworkImage(recipientAvatar) : null),
-              Text(recipientName, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: Colors.black87)),
+              Text(recipientName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.black87)),
             ],
           ),
-          const SizedBox(height: 10),
-          Text('给「$discussionTitle」主题的 #$postNumber 帖', style: const TextStyle(color: Colors.black87, fontSize: 14)),
+          const SizedBox(height: 12),
+          Text('给「$discussionTitle」主题的 #$postNumber 帖', style: const TextStyle(color: Colors.black87, fontSize: 13)),
         ],
       ),
     );
   }
 
-  // [修复图 2 问题] 动态获取回复所在的真实帖子标题
+  // 渲染我的回复
   Widget _buildPostItem(Map<String, dynamic> item) {
     final attrs = item['attributes'] ?? {};
     final timeStr = attrs['createdAt'];
@@ -375,7 +360,7 @@ class _UserActivityPageState extends State<UserActivityPage> {
     }
 
     return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      margin: const EdgeInsets.symmetric(horizontal: 16),
       decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 5, offset: const Offset(0, 2))]),
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -395,14 +380,13 @@ class _UserActivityPageState extends State<UserActivityPage> {
     );
   }
 
-  // 兜底基础卡片（防止主题数据异常）
   Widget _buildDefaultItem(Map<String, dynamic> item) {
     final attrs = item['attributes'] ?? {};
     final timeStr = attrs['createdAt'];
     final timeDisplay = timeStr != null ? formatRelativeTime(DateTime.parse(timeStr)) : '';
 
     return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      margin: const EdgeInsets.symmetric(horizontal: 16),
       decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 5, offset: const Offset(0, 2))]),
       padding: const EdgeInsets.all(16),
       child: Column(
