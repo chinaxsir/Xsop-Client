@@ -1,6 +1,6 @@
 // 文件位置: lib/pages/notifications_page.dart
 
-import 'dart:async'; // 引入定时器库
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:xsop_forum/api/api_client.dart';
 import 'package:xsop_forum/pages/home_page.dart' show formatRelativeTime;
@@ -17,8 +17,8 @@ class _NotificationsPageState extends State<NotificationsPage> with WidgetsBindi
   bool _isLoading = true;
   String? _error;
   List<dynamic> _notifications = [];
+  List<dynamic> _included = []; // 引入关联数据池
   
-  // 声明定时器
   Timer? _pollingTimer;
 
   @override
@@ -26,14 +26,12 @@ class _NotificationsPageState extends State<NotificationsPage> with WidgetsBindi
     super.initState();
     WidgetsBinding.instance.addObserver(this); 
     _loadData();
-    
-    // [核心修复 3：设置 15 秒的心跳轮询，当用户在该页面时，实现通知的实时同步]
     _pollingTimer = Timer.periodic(const Duration(seconds: 15), (_) => _loadData(silent: true));
   }
 
   @override
   void dispose() {
-    _pollingTimer?.cancel(); // 退出页面时立即销毁定时器，防止内存泄漏
+    _pollingTimer?.cancel(); 
     WidgetsBinding.instance.removeObserver(this); 
     super.dispose();
   }
@@ -46,31 +44,50 @@ class _NotificationsPageState extends State<NotificationsPage> with WidgetsBindi
   }
 
   Future<void> _loadData({bool silent = false}) async {
-    if (!silent) {
-      setState(() {
-        _isLoading = true;
-        _error = null;
-      });
-    }
+    if (!silent) setState(() { _isLoading = true; _error = null; });
     
     try {
       final res = await widget.api.getNotifications();
-      final data = res['data'] as List<dynamic>? ?? [];
-      
       if (mounted) {
         setState(() {
-          _notifications = data;
+          _notifications = res['data'] as List<dynamic>? ?? [];
+          _included = res['included'] as List<dynamic>? ?? [];
           _isLoading = false;
           _error = null;
         });
       }
     } catch (e) {
-      if (mounted && !silent) {
-        setState(() {
-          _error = '无法加载通知，请检查网络';
-          _isLoading = false;
-        });
-      }
+      if (mounted && !silent) setState(() { _error = '数据同步异常，请检视网络状态'; _isLoading = false; });
+    }
+  }
+
+  // [动态匹配引擎：从 included 池中捕获触发动作的用户信息]
+  Map<String, dynamic>? _getFromUser(Map<String, dynamic> notif) {
+    final fromUserId = notif['relationships']?['fromUser']?['data']?['id']?.toString();
+    if (fromUserId == null) return null;
+    try {
+      return _included.firstWhere((e) => e['type'] == 'users' && e['id'].toString() == fromUserId);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // [官方语言格式化引擎：将系统的动作代码转化为官方描述模板]
+  String _formatNotificationContent(String contentType, String? fromUserName) {
+    final name = fromUserName ?? '系统';
+    switch (contentType) {
+      case 'warning':
+        return '系统已下发来自 $name 的站务违规处理通报';
+      case 'postLiked':
+        return '$name 肯定并点赞了您的发言';
+      case 'postMentioned':
+        return '$name 在交互记录中提及了您';
+      case 'newPost':
+        return '$name 对您的主题进行了跟进回复';
+      case 'discussionRenamed':
+        return '$name 对关联主题的名称进行了修订';
+      default:
+        return '接收到新的系统事务状态变动 ($contentType)';
     }
   }
 
@@ -95,10 +112,7 @@ class _NotificationsPageState extends State<NotificationsPage> with WidgetsBindi
   }
 
   Widget _buildBody() {
-    if (_isLoading) {
-      return const Center(child: CircularProgressIndicator());
-    }
-    
+    if (_isLoading) return const Center(child: CircularProgressIndicator());
     if (_error != null) {
       return Center(
         child: Column(
@@ -108,15 +122,11 @@ class _NotificationsPageState extends State<NotificationsPage> with WidgetsBindi
             const SizedBox(height: 16),
             Text(_error!, style: TextStyle(color: Colors.grey.shade500, fontSize: 14)),
             const SizedBox(height: 16),
-            FilledButton.tonal(
-              onPressed: () => _loadData(),
-              child: const Text('点击重试')
-            ),
+            FilledButton.tonal(onPressed: () => _loadData(), child: const Text('重新建立链接')),
           ],
         ),
       );
     }
-    
     if (_notifications.isEmpty) {
       return CustomScrollView(
         physics: const AlwaysScrollableScrollPhysics(),
@@ -129,7 +139,7 @@ class _NotificationsPageState extends State<NotificationsPage> with WidgetsBindi
                 children: [
                   Icon(Icons.notifications_none, size: 56, color: Colors.grey.shade300),
                   const SizedBox(height: 16),
-                  Text('暂无新通知', style: TextStyle(color: Colors.grey.shade400, fontSize: 14)),
+                  Text('当前业务列表暂无新通知', style: TextStyle(color: Colors.grey.shade400, fontSize: 14)),
                 ],
               ),
             ),
@@ -145,24 +155,33 @@ class _NotificationsPageState extends State<NotificationsPage> with WidgetsBindi
       itemBuilder: (context, index) {
         final notif = _notifications[index];
         final attrs = notif['attributes'] ?? {};
-        final contentType = attrs['contentType'] ?? '系统通知';
+        final contentType = attrs['contentType'] ?? '系统事务';
         final timeStr = attrs['createdAt'];
         
+        final fromUser = _getFromUser(notif);
+        final fromUserName = fromUser?['attributes']?['displayName'] ?? fromUser?['attributes']?['username'];
+        final fromUserAvatar = fromUser?['attributes']?['avatarUrl'];
+        
+        final displayTitle = _formatNotificationContent(contentType, fromUserName);
+        
         return ListTile(
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           leading: CircleAvatar(
             backgroundColor: Colors.blue.shade50,
-            child: Icon(Icons.notifications, color: Theme.of(context).colorScheme.primary, size: 20),
+            backgroundImage: fromUserAvatar != null ? NetworkImage(fromUserAvatar) : null,
+            child: fromUserAvatar == null 
+              ? Icon(Icons.notifications, color: Theme.of(context).colorScheme.primary, size: 20)
+              : null,
           ),
-          title: Text(contentType, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
+          title: Text(displayTitle, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: Colors.black87)),
           subtitle: timeStr != null 
               ? Padding(
-                  padding: const EdgeInsets.only(top: 4),
+                  padding: const EdgeInsets.only(top: 6),
                   child: Text(formatRelativeTime(DateTime.parse(timeStr)), style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
                 )
               : null,
           onTap: () {
-            // 点击可拓展相关操作
+            // [预留扩展接口] 针对各项事务的细则进行跳转
           },
         );
       },
