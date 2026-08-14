@@ -116,8 +116,6 @@ class _UserProfilePageState extends State<UserProfilePage> {
                         _MenuItem(icon: Icons.chat_bubble_outline, color: Colors.lightBlue, title: '我的回复', onTap: () => _navigateToActivity('我的回复', 'posts')),
                       ],
                     ),
-                    
-                    // [核心修复：移除了重复展示点赞与余额的“个人资产”区块，UI更清爽]
                     const SizedBox(height: 24),
 
                     _buildSectionGroup(
@@ -218,14 +216,10 @@ class _UserProfilePageState extends State<UserProfilePage> {
         color: const Color(0xFF4A4A4A),
         borderRadius: BorderRadius.circular(8),
       ),
+      // [核心修复 1：取消了勋章数量显示，仅保留点赞与XSD余额]
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.workspace_premium, size: 14, color: Colors.white),
-          const SizedBox(width: 4),
-          Text(_currentUserData.badgesCount, style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
-          const SizedBox(width: 12),
-          
           const Icon(Icons.thumb_up, size: 14, color: Colors.orangeAccent),
           const SizedBox(width: 4),
           Text(_currentUserData.likesReceived, style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
