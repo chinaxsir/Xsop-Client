@@ -209,6 +209,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
     );
   }
 
+  // [严格对齐图 1 要求：深色胶囊仅保留点赞和资产]
   Widget _buildAssetPill() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -216,7 +217,6 @@ class _UserProfilePageState extends State<UserProfilePage> {
         color: const Color(0xFF4A4A4A),
         borderRadius: BorderRadius.circular(8),
       ),
-      // [核心修复 1：取消了勋章数量显示，仅保留点赞与XSD余额]
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -224,7 +224,6 @@ class _UserProfilePageState extends State<UserProfilePage> {
           const SizedBox(width: 4),
           Text(_currentUserData.likesReceived, style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
           const SizedBox(width: 12),
-          
           Text('${_currentUserData.money} XSD', style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
         ],
       ),
