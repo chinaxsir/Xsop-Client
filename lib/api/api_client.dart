@@ -14,7 +14,6 @@ class ApiClient {
     baseUrl: baseUrl,
     connectTimeout: const Duration(seconds: 15),
     receiveTimeout: const Duration(seconds: 20),
-    // [核心修复1：追加发包超时熔断！一旦系统挂起导致底层 Socket 死亡，最多等待 15 秒强制释放 UI 锁，防止永久假死]
     sendTimeout: const Duration(seconds: 15),
     headers: {
       'Content-Type': 'application/json',
@@ -29,7 +28,6 @@ class ApiClient {
         }
         handler.next(options);
       },
-      // [核心修复2：底层错误拦截器。当息屏导致的网络连接被系统重置时，友好地向上层抛出异常而不是卡死]
       onError: (DioException e, handler) {
         handler.next(e);
       }
@@ -298,6 +296,12 @@ class ApiClient {
   Future<bool> get isLoggedIn async {
     final token = await getToken();
     return token != null && token.isNotEmpty;
+  }
+
+  // [核心增强：提供底层通用接口，方便一键查询任何扩展插件的数据流水]
+  Future<Map<String, dynamic>> getDynamicList(String endpoint, {Map<String, dynamic>? queryParameters}) async {
+    final response = await _dio.get(endpoint, queryParameters: queryParameters);
+    return _asMap(response.data);
   }
 
   Future<void> _saveAuth(String token, int? userId) async {
