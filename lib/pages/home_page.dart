@@ -11,6 +11,7 @@ import 'package:xsop_forum/pages/login_page.dart';
 import 'package:xsop_forum/pages/editor_page.dart';
 import 'package:xsop_forum/pages/notifications_page.dart';
 
+// [核心修复1：混入 WidgetsBindingObserver 以全面接管操作系统的挂起/唤醒事件]
 class HomePage extends StatefulWidget {
   final ApiClient api;
   final String baseUrl;
@@ -25,7 +26,7 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
+class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   final ScrollController _scrollController = ScrollController();
 
@@ -45,23 +46,42 @@ class _HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
+    // 注册系统生命周期观察者
+    WidgetsBinding.instance.addObserver(this);
     _scrollController.addListener(_onScroll);
     _loadAllGlobalData();
   }
 
   @override
   void dispose() {
+    // 销毁时移除观察者
+    WidgetsBinding.instance.removeObserver(this);
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
     super.dispose();
   }
 
-  Future<void> _loadAllGlobalData() async {
+  // [核心修复2：拦截生命周期变化]
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      // 当应用从后台返回、或手机熄屏后重新点亮时触发。
+      // 静默拉取最新数据，用于重建已经被系统强制切断的底层 TCP/IP 链接。
+      _loadAllGlobalData(isSilentWakeup: true);
+    }
+  }
+
+  Future<void> _loadAllGlobalData({bool isSilentWakeup = false}) async {
     _loadForumInfo();
-    // 强制同步
     await _loadCurrentUser();
     await _loadTags();
-    _refresh(skipGlobalSync: true); // 避免重复同步
+    
+    // 如果是静默唤醒，我们不在前台弹出明显的 loading 动画，而是后台暗中刷新
+    if (isSilentWakeup) {
+      _refresh(skipGlobalSync: true, silent: true);
+    } else {
+      _refresh(skipGlobalSync: true);
+    }
   }
 
   Future<void> _loadForumInfo() async {
@@ -94,39 +114,41 @@ class _HomePageState extends State<HomePage> {
         if (mounted) setState(() => _currentUser = null);
         return;
       }
-      // [核心：每次都会带回最新的金币、点赞、徽章状态]
       final res = await widget.api.getUser(userId);
       if (mounted) setState(() => _currentUser = parseUser(res, widget.baseUrl));
     } catch (_) {}
   }
 
-  Future<void> _refresh({bool skipGlobalSync = false}) async {
-    setState(() {
-      _refreshing = true;
-      _error = null;
-    });
+  Future<void> _refresh({bool skipGlobalSync = false, bool silent = false}) async {
+    if (!silent) {
+      setState(() {
+        _refreshing = true;
+        _error = null;
+      });
+    }
+    
     try {
-      // [核心修复5：用户下拉刷新时，不仅刷新帖子，还隐式刷新权限和资产！实现实时同步]
       if (!skipGlobalSync) {
         await _loadTags();
         await _loadCurrentUser();
       }
 
-      _page = 1;
       final res = await widget.api.getDiscussions(page: 1, tag: _selectedTagSlug);
       final list = parseDiscussionList(res, widget.baseUrl);
       if (mounted) {
         setState(() {
+          _page = 1;
           _discussions
             ..clear()
             ..addAll(list.items);
           _hasMore = list.hasMore;
+          _error = null;
         });
       }
     } catch (_) {
-      if (mounted) setState(() => _error = '加载失败，请下拉重试');
+      if (mounted && !silent) setState(() => _error = '加载失败，请下拉重试');
     } finally {
-      if (mounted) setState(() => _refreshing = false);
+      if (mounted && !silent) setState(() => _refreshing = false);
     }
   }
 
@@ -225,7 +247,7 @@ class _HomePageState extends State<HomePage> {
       ),
       drawer: _buildDrawer(),
       body: RefreshIndicator(
-        onRefresh: _refresh,
+        onRefresh: () => _refresh(), // 手动下拉依然全量刷新
         child: _buildBody(),
       ),
       floatingActionButton: FloatingActionButton(
@@ -248,10 +270,9 @@ class _HomePageState extends State<HomePage> {
             Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (context) => UserProfilePage(user: _currentUser!, api: widget.api), // 传递 api 便于实时刷新
+                builder: (context) => UserProfilePage(user: _currentUser!, api: widget.api),
               ),
             ).then((_) {
-               // 从个人中心返回后，静默刷新一次资产数据
                _loadCurrentUser();
             });
           } else {
@@ -401,7 +422,7 @@ class _HomePageState extends State<HomePage> {
           Center(child: Text(_error!)),
           const SizedBox(height: 12),
           Center(
-            child: FilledButton.tonal(onPressed: _refresh, child: const Text('重试')),
+            child: FilledButton.tonal(onPressed: () => _refresh(), child: const Text('重试')),
           ),
         ],
       );
@@ -527,7 +548,6 @@ class DiscussionTile extends StatelessWidget {
                     const SizedBox(height: 10),
                     Row(
                       children: [
-                        // [修改备注：列表页发帖人名字后方追加真实的徽章渲染]
                         if (author != null && author.groups.isNotEmpty) ...[
                           buildUserBadges(author.groups),
                           const SizedBox(width: 12),
