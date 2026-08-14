@@ -1,144 +1,161 @@
-// 文件位置: lib/pages/user_profile_page.dart
+// 文件位置: lib/pages/user_activity_page.dart
 
 import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
+import 'package:flutter_widget_from_html/flutter_widget_from_html.dart';
 import 'package:xsop_forum/api/api_client.dart';
 import 'package:xsop_forum/models/flarum_models.dart';
-import 'package:xsop_forum/pages/user_activity_page.dart';
+import 'package:xsop_forum/pages/home_page.dart' show formatRelativeTime;
 
-class UserProfilePage extends StatefulWidget {
-  final FlarumUser user;
+class UserActivityPage extends StatefulWidget {
   final ApiClient api;
+  final FlarumUser user;
+  final String title;
+  final String activityType;
 
-  const UserProfilePage({
+  const UserActivityPage({
     super.key,
-    required this.user,
     required this.api,
+    required this.user,
+    required this.title,
+    required this.activityType,
   });
 
   @override
-  State<UserProfilePage> createState() => _UserProfilePageState();
+  State<UserActivityPage> createState() => _UserActivityPageState();
 }
 
-class _UserProfilePageState extends State<UserProfilePage> {
-  bool _isCurrentUser = false;
-  late FlarumUser _currentUserData;
-  bool _isRefreshing = false;
+class _UserActivityPageState extends State<UserActivityPage> {
+  bool _isLoading = true;
+  String? _error;
+  List<dynamic> _items = [];
+  List<dynamic> _included = [];
+  String _customEmptyMessage = '当前业务项下暂无记录流水。';
 
   @override
   void initState() {
     super.initState();
-    _currentUserData = widget.user;
-    _checkIfCurrentUser();
-    _refreshUserData(); 
+    _loadData();
   }
 
-  Future<void> _checkIfCurrentUser() async {
-    final currentUserId = await widget.api.getUserId();
-    if (mounted) {
-      setState(() {
-        _isCurrentUser = currentUserId != null && currentUserId.toString() == _currentUserData.id;
-      });
+  Future<Map<String, dynamic>> _robustFetch(List<String> endpoints, Map<String, dynamic> query, String includes) async {
+    for (final ep in endpoints) {
+      try {
+        final q = Map<String, dynamic>.from(query);
+        q['include'] = includes;
+        return await widget.api.getDynamicList(ep, queryParameters: q);
+      } on DioException catch (e) {
+        if (e.response?.statusCode == 404) continue; 
+        if (e.response?.statusCode == 400 || e.response?.statusCode == 500) {
+           try {
+             return await widget.api.getDynamicList(ep, queryParameters: query);
+           } catch (_) {
+             try {
+               return await widget.api.getDynamicList(ep);
+             } catch (_) { continue; }
+           }
+        }
+      }
+    }
+    throw DioException(
+      requestOptions: RequestOptions(path: ''),
+      response: Response(requestOptions: RequestOptions(path: ''), statusCode: 404),
+    );
+  }
+
+  // [无差别穿透过滤引擎] 彻底击碎各插件的命名壁垒
+  bool _isItemRelatedToUser(Map<String, dynamic> item) {
+    final userId = widget.user.id;
+    final rels = item['relationships'] ?? {};
+    final attrs = item['attributes'] ?? {};
+
+    // 扫描所有深层关联节点
+    for (var val in rels.values) {
+      if (val is Map && val['data'] is Map) {
+        if (val['data']['id'].toString() == userId) return true;
+      }
+      if (val is Map && val['data'] is List) {
+        for (var v in val['data']) {
+          if (v is Map && v['id'].toString() == userId) return true;
+        }
+      }
+    }
+    
+    // 扫描所有显式暴露的属性节点
+    if (attrs.values.any((v) => v.toString() == userId)) return true;
+    
+    return false;
+  }
+
+  void _filterAndSetData(Map<String, dynamic> res) {
+    final rawItems = res['data'] as List<dynamic>? ?? [];
+    _included = res['included'] as List<dynamic>? ?? [];
+
+    if (widget.activityType == 'discussions' || widget.activityType == 'posts') {
+       _items = rawItems;
+    } else {
+       // 采用智能匹配：只要发现该笔流水有你的印记，立刻展示
+       _items = rawItems.where((i) => _isItemRelatedToUser(i as Map<String, dynamic>)).toList();
+    }
+    
+    if (_items.isEmpty) {
+        throw DioException(requestOptions: RequestOptions(path: ''), response: Response(requestOptions: RequestOptions(path: ''), statusCode: 404));
     }
   }
 
-  Future<void> _refreshUserData() async {
-    if (_isRefreshing) return;
-    setState(() => _isRefreshing = true);
+  Future<void> _loadData() async {
+    setState(() { _isLoading = true; _error = null; });
     try {
-      final res = await widget.api.getUser(int.parse(_currentUserData.id));
+      Map<String, dynamic> res;
+      switch (widget.activityType) {
+        case 'discussions':
+          res = await widget.api.getDynamicList('/api/discussions', queryParameters: {'filter[q]': 'author:${widget.user.username}'});
+          _customEmptyMessage = '该系统实体暂未建立任何主题档案。';
+          _filterAndSetData(res);
+          break;
+        case 'posts':
+          res = await widget.api.getDynamicList('/api/posts', queryParameters: {'filter[user]': widget.user.id, 'include': 'discussion'});
+          _customEmptyMessage = '该系统实体暂无交互回复明细。';
+          _filterAndSetData(res);
+          break;
+        case 'warnings':
+          res = await _robustFetch(['/api/warnings', '/api/user-warnings'], {'filter[user]': widget.user.id}, 'addedByUser,post,post.discussion');
+          _customEmptyMessage = '核查完毕：该实体名下暂无站务违规处理记录。';
+          _filterAndSetData(res);
+          break;
+        case 'tips':
+          res = await _robustFetch(['/api/tips', '/api/rewards', '/api/moneyHistory', '/api/money-transfers'], {'filter[user]': widget.user.id}, 'sender,recipient,post,post.discussion');
+          _customEmptyMessage = '核查完毕：该实体名下暂无资产流通或打赏流水。';
+          _filterAndSetData(res);
+          break;
+        default:
+          throw Exception('未知的业务映射流');
+      }
+      if (mounted) setState(() => _isLoading = false);
+      
+    } on DioException catch (e) {
       if (mounted) {
         setState(() {
-          _currentUserData = parseUser(res, widget.api.baseUrl);
+          if (e.response?.statusCode == 404) {
+             _items = []; _error = null; 
+          } else if (e.response?.statusCode == 403) {
+             _error = '系统校验驳回：当前权限配置不满足查阅要求';
+          } else {
+             _error = '远端服务异常，请核对网络通信状态';
+          }
+          _isLoading = false;
         });
       }
     } catch (e) {
-      // 忽略刷新错误，保持旧数据展示
-    } finally {
-      if (mounted) setState(() => _isRefreshing = false);
+      if (mounted) setState(() { _error = '本地引擎反序列化失败'; _isLoading = false; });
     }
   }
 
-  void _navigateToActivity(String title, String type) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => UserActivityPage(
-          api: widget.api,
-          user: _currentUserData,
-          title: title,
-          activityType: type,
-        ),
-      ),
-    );
-  }
-
-  // [核心修复：完美对齐图 2 和图 3，针对目标用户调出全功能警告扣分面板]
-  Future<void> _showAdminWarnDialog() async {
-    final strikesCtrl = TextEditingController(text: '1');
-    final publicCtrl = TextEditingController();
-    final privateCtrl = TextEditingController();
-    bool isSubmitting = false;
-
-    await showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (context, setStateDialog) => AlertDialog(
-          backgroundColor: Colors.white,
-          surfaceTintColor: Colors.transparent,
-          title: Text('警告 ${_currentUserData.username}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('严重程度：记几分？', style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 6),
-                TextField(controller: strikesCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(border: OutlineInputBorder(), isDense: true)),
-                const SizedBox(height: 16),
-                
-                const Text('用户批注。为什么警告？（批注对用户可见）', style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 6),
-                TextField(controller: publicCtrl, maxLines: 3, decoration: const InputDecoration(border: OutlineInputBorder())),
-                const SizedBox(height: 16),
-                
-                const Text('管理员备注。（备注仅对管理员可见）', style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 6),
-                TextField(controller: privateCtrl, maxLines: 3, decoration: const InputDecoration(border: OutlineInputBorder())),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消', style: TextStyle(color: Colors.grey))),
-            FilledButton(
-              style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
-              onPressed: isSubmitting ? null : () async {
-                setStateDialog(() => isSubmitting = true);
-                try {
-                  await widget.api.warnUser(
-                    int.parse(_currentUserData.id),
-                    strikes: int.tryParse(strikesCtrl.text) ?? 0,
-                    publicComment: publicCtrl.text.trim(),
-                    privateComment: privateCtrl.text.trim(),
-                  );
-                  if (mounted) {
-                    Navigator.pop(ctx);
-                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('处罚记录已下发！')));
-                  }
-                } on DioException catch (e) {
-                  String errMsg = '操作失败：您可能没有权限';
-                  if (e.response?.statusCode == 403) errMsg = '越权操作：当前账号无权对该用户下发警告';
-                  if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg)));
-                } finally {
-                  if (mounted) setStateDialog(() => isSubmitting = false);
-                }
-              },
-              child: isSubmitting ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('发送警告'),
-            )
-          ],
-        )
-      )
-    );
+  Map<String, dynamic>? _getIncluded(String type, String? id) {
+    if (id == null) return null;
+    try {
+      return _included.firstWhere((e) => e['type'] == type && e['id'].toString() == id);
+    } catch (_) { return null; }
   }
 
   @override
@@ -146,238 +163,258 @@ class _UserProfilePageState extends State<UserProfilePage> {
     return Scaffold(
       backgroundColor: const Color(0xFFF2F2F7),
       appBar: AppBar(
-        title: const Text('个人中心', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
         backgroundColor: Colors.white,
         surfaceTintColor: Colors.transparent,
-        elevation: 0,
-        centerTitle: true,
-        actions: [
-          // [新增：查看他人主页时，显示“操作”下拉菜单]
-          if (!_isCurrentUser)
-            PopupMenuButton<String>(
-              icon: const Icon(Icons.more_vert, color: Colors.black87),
-              color: Colors.white,
-              surfaceTintColor: Colors.transparent,
-              onSelected: (val) {
-                if (val == 'warn') _showAdminWarnDialog();
-              },
-              itemBuilder: (context) => [
-                const PopupMenuItem(value: 'warn', child: Row(children: [Icon(Icons.warning_amber, color: Colors.redAccent, size: 20), SizedBox(width: 8), Text('站务警告', style: TextStyle(color: Colors.redAccent))])),
-              ],
-            )
-        ],
+        title: Text(widget.title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(0.5),
+          child: Container(color: const Color(0xFFE5E5EA), height: 0.5),
+        ),
       ),
       body: RefreshIndicator(
-        onRefresh: _refreshUserData,
-        child: CustomScrollView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          slivers: [
-            SliverToBoxAdapter(
-              child: Container(
-                color: Colors.white,
-                padding: const EdgeInsets.only(top: 24, bottom: 32),
-                child: Column(
-                  children: [
-                    _buildAvatar(),
-                    const SizedBox(height: 16),
-                    _buildUserInfo(),
-                    const SizedBox(height: 16),
-                    _buildAssetPill(),
-                  ],
-                ),
-              ),
-            ),
-            
-            SliverToBoxAdapter(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 20.0),
-                child: Column(
-                  children: [
-                    _buildSectionGroup(
-                      title: '论坛交流',
-                      items: [
-                        _MenuItem(icon: Icons.article_outlined, color: Colors.blueAccent, title: '发布的主题', onTap: () => _navigateToActivity('发布的主题', 'discussions')),
-                        _MenuItem(icon: Icons.chat_bubble_outline, color: Colors.lightBlue, title: '我的回复', onTap: () => _navigateToActivity('我的回复', 'posts')),
-                      ],
-                    ),
-                    const SizedBox(height: 24),
-
-                    // [核心修复：化繁为简，将收发打赏与警告分别整合为单一的高级模块]
-                    _buildSectionGroup(
-                      title: '个人记录',
-                      items: [
-                        _MenuItem(icon: Icons.card_giftcard, color: Colors.orange, title: '打赏记录', onTap: () => _navigateToActivity('打赏记录', 'tips')),
-                        _MenuItem(icon: Icons.warning_amber_rounded, color: Colors.red, title: '站务警告', onTap: () => _navigateToActivity('站务警告', 'warnings')),
-                      ],
-                    ),
-                    const SizedBox(height: 24),
-
-                    if (_isCurrentUser)
-                      _buildSectionGroup(
-                        title: '系统设置',
-                        items: [
-                          _MenuItem(icon: Icons.settings_outlined, color: Colors.grey.shade700, title: '账号设置', onTap: () {
-                             ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请前往网页版进行账号核心安全设置')));
-                          }),
-                          _MenuItem(
-                            icon: Icons.exit_to_app, 
-                            color: Colors.red, 
-                            title: '退出登录', 
-                            textColor: Colors.red,
-                            hideArrow: true,
-                            onTap: () async {
-                              await widget.api.logout();
-                              if (mounted) {
-                                Navigator.of(context).popUntil((route) => route.isFirst);
-                              }
-                            },
-                          ),
-                        ],
-                      ),
-                    
-                    const SizedBox(height: 40),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
+        onRefresh: _loadData,
+        child: _buildBody(),
       ),
     );
   }
 
-  Widget _buildAvatar() {
-    final name = _currentUserData.displayName.isNotEmpty ? _currentUserData.displayName : _currentUserData.username;
-    final letter = name.isNotEmpty ? name[0].toUpperCase() : '?';
-
-    return CircleAvatar(
-      radius: 46,
-      backgroundColor: Colors.grey.shade200,
-      backgroundImage: _currentUserData.avatarUrl != null ? NetworkImage(_currentUserData.avatarUrl!) : null,
-      child: _currentUserData.avatarUrl == null
-          ? Text(letter, style: TextStyle(fontSize: 32, color: Theme.of(context).colorScheme.primary, fontWeight: FontWeight.bold))
-          : null,
-    );
-  }
-
-  Widget _buildUserInfo() {
-    return Column(
-      children: [
-        Row(
+  Widget _buildBody() {
+    if (_isLoading) return const Center(child: CircularProgressIndicator());
+    
+    if (_error != null) {
+      return Center(
+        child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Text(
-              _currentUserData.displayName.isNotEmpty ? _currentUserData.displayName : _currentUserData.username,
-              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.black87),
-            ),
-            if (_currentUserData.groups.isNotEmpty) ...[
-              const SizedBox(width: 8),
-              buildUserBadges(_currentUserData.groups),
-            ]
+            Icon(Icons.wifi_off, size: 56, color: Colors.grey.shade300),
+            const SizedBox(height: 16),
+            Text(_error!, style: TextStyle(color: Colors.grey.shade500, fontSize: 14)),
+            const SizedBox(height: 16),
+            FilledButton.tonal(onPressed: _loadData, child: const Text('重试通信链接')),
           ],
         ),
-        const SizedBox(height: 4),
-        Text(
-          '@${_currentUserData.username}',
-          style: TextStyle(fontSize: 14, color: Colors.grey.shade500),
-        ),
-      ],
+      );
+    }
+    
+    if (_items.isEmpty) {
+      return CustomScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        slivers: [
+          SliverFillRemaining(
+            hasScrollBody: false,
+            child: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.inbox_outlined, size: 56, color: Colors.grey.shade300),
+                  const SizedBox(height: 16),
+                  Text(_customEmptyMessage, style: TextStyle(color: Colors.grey.shade500, fontSize: 14)),
+                ],
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+    
+    return ListView.separated(
+      physics: const AlwaysScrollableScrollPhysics(),
+      itemCount: _items.length,
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      separatorBuilder: (_, __) => const SizedBox(height: 16),
+      itemBuilder: (context, index) {
+        final item = _items[index];
+        final type = item['type'];
+        
+        if (type == 'warnings') return _buildWarningItem(item);
+        if (type == 'tips' || type == 'rewards' || type == 'money_transfers' || type == 'moneyHistory') return _buildTipItem(item);
+        if (type == 'posts') return _buildPostItem(item);
+        
+        return _buildDefaultItem(item);
+      },
     );
   }
 
-  Widget _buildAssetPill() {
+  Widget _buildWarningItem(Map<String, dynamic> item) {
+    final attrs = item['attributes'] ?? {};
+    
+    final addedByUserId = item['relationships']?['addedByUser']?['data']?['id']?.toString();
+    final addedByUser = _getIncluded('users', addedByUserId);
+    final adminName = addedByUser?['attributes']?['displayName'] ?? addedByUser?['attributes']?['username'] ?? '系统管理员';
+    final adminAvatar = addedByUser?['attributes']?['avatarUrl'];
+
+    final postId = item['relationships']?['post']?['data']?['id']?.toString();
+    final post = _getIncluded('posts', postId);
+    final discussionId = post?['relationships']?['discussion']?['data']?['id']?.toString();
+    final discussion = _getIncluded('discussions', discussionId);
+    final discussionTitle = discussion?['attributes']?['title'] ?? '缺失关联凭证';
+
+    final strikes = attrs['strikes'] ?? 0;
+    final comment = attrs['publicComment'] ?? attrs['reason'] ?? '基于安全条例审计下发。';
+    final timeStr = attrs['createdAt'];
+    final timeDisplay = timeStr != null ? formatRelativeTime(DateTime.parse(timeStr)) : '业务时间缺失';
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      margin: const EdgeInsets.symmetric(horizontal: 16),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: const Color(0xFF4A4A4A),
+        color: const Color(0xFFF4F6F8), 
         borderRadius: BorderRadius.circular(8),
       ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Icon(Icons.thumb_up, size: 14, color: Colors.orangeAccent),
-          const SizedBox(width: 4),
-          Text(_currentUserData.likesReceived, style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
-          const SizedBox(width: 12),
-          Text('${_currentUserData.money} XSD', style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+          Row(
+            children: [
+              CircleAvatar(radius: 12, backgroundColor: Colors.grey.shade200, backgroundImage: adminAvatar != null ? NetworkImage(adminAvatar) : null, child: adminAvatar == null ? Icon(Icons.person, size: 14, color: Theme.of(context).colorScheme.primary) : null),
+              const SizedBox(width: 8),
+              Text(adminName, style: const TextStyle(color: Colors.blue, fontWeight: FontWeight.w500, fontSize: 14)),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text('记务考核：$strikes分 | 归档：$timeDisplay', style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
+          
+          const SizedBox(height: 16),
+          Text('关联业务实体', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.grey.shade600)),
+          const SizedBox(height: 8),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(6), border: Border.all(color: Colors.grey.shade200)),
+            child: Row(
+              children: [
+                const Icon(Icons.chat, size: 18, color: Colors.blueAccent),
+                const SizedBox(width: 8),
+                Expanded(child: Text(discussionTitle, style: const TextStyle(color: Colors.black87, fontWeight: FontWeight.w500, fontSize: 14), overflow: TextOverflow.ellipsis)),
+              ],
+            ),
+          ),
+          
+          const SizedBox(height: 16),
+          Text('行政批注内容', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.grey.shade600)),
+          const SizedBox(height: 8),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(6), border: Border.all(color: Colors.grey.shade200)),
+            child: Text(comment, style: const TextStyle(color: Colors.black87, fontSize: 14)),
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildSectionGroup({required String title, required List<_MenuItem> items}) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.only(left: 12, bottom: 8),
-          child: Text(
-            title,
-            style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.grey.shade600),
-          ),
-        ),
-        Container(
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(12),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.02),
-                blurRadius: 10,
-                offset: const Offset(0, 2),
-              ),
+  Widget _buildTipItem(Map<String, dynamic> item) {
+    final attrs = item['attributes'] ?? {};
+    
+    final amount = attrs['amount']?.toString() ?? '0';
+    final timeStr = attrs['createdAt'];
+    final timeDisplay = timeStr != null ? formatRelativeTime(DateTime.parse(timeStr)) : '业务时间缺失';
+
+    final senderId = item['relationships']?['sender']?['data']?['id']?.toString() ?? attrs['senderId']?.toString();
+    final sender = _getIncluded('users', senderId);
+    final senderName = sender?['attributes']?['displayName'] ?? sender?['attributes']?['username'] ?? '匿名实体';
+    final senderAvatar = sender?['attributes']?['avatarUrl'];
+
+    final recipientId = item['relationships']?['recipient']?['data']?['id']?.toString() ?? attrs['recipientId']?.toString();
+    final recipient = _getIncluded('users', recipientId);
+    final recipientName = recipient?['attributes']?['displayName'] ?? recipient?['attributes']?['username'] ?? '匿名实体';
+    final recipientAvatar = recipient?['attributes']?['avatarUrl'];
+
+    final postId = item['relationships']?['post']?['data']?['id']?.toString();
+    final post = _getIncluded('posts', postId);
+    final postNumber = post?['attributes']?['number'] ?? 1;
+
+    final discussionId = post?['relationships']?['discussion']?['data']?['id']?.toString();
+    final discussion = _getIncluded('discussions', discussionId);
+    final discussionTitle = discussion?['attributes']?['title'] ?? '缺失关联项';
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: Colors.grey.shade200, width: 1.5), 
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 6,
+            runSpacing: 8,
+            children: [
+              Icon(Icons.card_giftcard, size: 16, color: Colors.grey.shade600),
+              Text(timeDisplay, style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
+              const SizedBox(width: 8),
+              Text('$amount XSD', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.black87)),
+              const SizedBox(width: 8),
+              Text('汇出方', style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
+              CircleAvatar(radius: 10, backgroundColor: Colors.grey.shade200, backgroundImage: senderAvatar != null ? NetworkImage(senderAvatar) : null),
+              Text(senderName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.black87)),
+              Text('注资于', style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
+              CircleAvatar(radius: 10, backgroundColor: Colors.grey.shade200, backgroundImage: recipientAvatar != null ? NetworkImage(recipientAvatar) : null),
+              Text(recipientName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.black87)),
             ],
           ),
-          child: Column(
-            children: List.generate(items.length, (index) {
-              final item = items[index];
-              return Column(
-                children: [
-                  ListTile(
-                    onTap: item.onTap,
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
-                    leading: Icon(item.icon, color: item.color, size: 24),
-                    title: Text(item.title, style: TextStyle(fontSize: 15, color: item.textColor ?? Colors.black87, fontWeight: FontWeight.w500)),
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (item.trailingText != null)
-                          Text(item.trailingText!, style: TextStyle(fontSize: 15, color: Colors.grey.shade500)),
-                        if (item.trailingText != null && !item.hideArrow)
-                          const SizedBox(width: 8),
-                        if (!item.hideArrow)
-                          Icon(Icons.arrow_forward_ios, size: 14, color: Colors.grey.shade400),
-                      ],
-                    ),
-                  ),
-                  if (index < items.length - 1)
-                    Divider(height: 1, thickness: 0.5, color: Colors.grey.shade200, indent: 56),
-                ],
-              );
-            }),
-          ),
-        ),
-      ],
+          const SizedBox(height: 12),
+          Text('对实体档案「$discussionTitle」项下的 #$postNumber 记录发起支持', style: const TextStyle(color: Colors.black87, fontSize: 13)),
+        ],
+      ),
     );
   }
-}
 
-class _MenuItem {
-  final IconData icon;
-  final Color color;
-  final String title;
-  final String? trailingText;
-  final Color? textColor;
-  final bool hideArrow;
-  final VoidCallback onTap;
+  Widget _buildPostItem(Map<String, dynamic> item) {
+    final attrs = item['attributes'] ?? {};
+    final timeStr = attrs['createdAt'];
+    final timeDisplay = timeStr != null ? formatRelativeTime(DateTime.parse(timeStr)) : '';
 
-  _MenuItem({
-    required this.icon,
-    required this.color,
-    required this.title,
-    this.trailingText,
-    this.textColor,
-    this.hideArrow = false,
-    required this.onTap,
-  });
+    String discussionTitle = '系统核心配置实体';
+    final discussionId = attrs['discussionId']?.toString() ?? item['relationships']?['discussion']?['data']?['id']?.toString();
+    if (discussionId != null) {
+      final dNode = _getIncluded('discussions', discussionId);
+      if (dNode != null) discussionTitle = dNode['attributes']?['title'] ?? '系统核心配置实体';
+    }
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 5, offset: const Offset(0, 2))]),
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('于「$discussionTitle」业务项下进行交互批注', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Colors.black87)),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(color: const Color(0xFFF9F9F9), borderRadius: BorderRadius.circular(8)),
+            child: HtmlWidget(attrs['contentHtml'] ?? attrs['content'] ?? '', textStyle: TextStyle(fontSize: 14, color: Colors.grey.shade800, height: 1.5)),
+          ),
+          const SizedBox(height: 8),
+          Text('归档日志：$timeDisplay', style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDefaultItem(Map<String, dynamic> item) {
+    final attrs = item['attributes'] ?? {};
+    final timeStr = attrs['createdAt'];
+    final timeDisplay = timeStr != null ? formatRelativeTime(DateTime.parse(timeStr)) : '';
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 5, offset: const Offset(0, 2))]),
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(attrs['title'] ?? '核心交互项记录', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Colors.black87)),
+          const SizedBox(height: 8),
+          Text('记录产生周期：$timeDisplay', style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
+        ],
+      ),
+    );
+  }
 }
