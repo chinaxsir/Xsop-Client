@@ -1,410 +1,295 @@
 // 文件位置: lib/pages/user_profile_page.dart
 
 import 'package:flutter/material.dart';
-import 'package:font_awesome_flutter/font_awesome_flutter.dart'; // 引入网页同源图标库
+import 'package:xsop_forum/api/api_client.dart';
 import 'package:xsop_forum/models/flarum_models.dart';
-import 'package:xsop_forum/api/api_client.dart'; 
-import 'package:xsop_forum/main.dart'; 
-
-import 'package:xsop_forum/pages/discussion_detail_page.dart'; 
-import 'package:xsop_forum/pages/home_page.dart' show formatRelativeTime; 
 
 class UserProfilePage extends StatefulWidget {
   final FlarumUser user;
   final ApiClient api;
 
-  const UserProfilePage({super.key, required this.user, required this.api});
+  const UserProfilePage({
+    super.key,
+    required this.user,
+    required this.api,
+  });
 
   @override
   State<UserProfilePage> createState() => _UserProfilePageState();
 }
 
 class _UserProfilePageState extends State<UserProfilePage> {
-  late FlarumUser _currentUser;
-  bool _isRefreshing = false;
+  bool _isCurrentUser = false;
 
   @override
   void initState() {
     super.initState();
-    _currentUser = widget.user;
-    _syncLatestUserData();
+    _checkIfCurrentUser();
   }
 
-  Future<void> _syncLatestUserData() async {
-    setState(() => _isRefreshing = true);
-    try {
-      final res = await widget.api.getUser(int.parse(_currentUser.id));
-      if (mounted) {
-        setState(() {
-          _currentUser = parseUser(res, widget.api.baseUrl);
-        });
-      }
-    } catch (_) {
-    } finally {
-      if (mounted) setState(() => _isRefreshing = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    
-    return Scaffold(
-      backgroundColor: Colors.white,
-      appBar: AppBar(
-        title: const Text('个人中心', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
-        backgroundColor: Colors.white,
-        surfaceTintColor: Colors.transparent,
-      ),
-      body: Column(
-        children: [
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(vertical: 40),
-            color: Colors.white,
-            child: Column(
-              children: [
-                Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    CircleAvatar(
-                      radius: 45,
-                      backgroundColor: Colors.grey.shade100,
-                      backgroundImage: _currentUser.avatarUrl != null
-                          ? NetworkImage(_currentUser.avatarUrl!)
-                          : null,
-                      child: _currentUser.avatarUrl == null
-                          ? Icon(Icons.person, size: 50, color: scheme.primary)
-                          : null,
-                    ),
-                    if (_isRefreshing)
-                      const Positioned(
-                        right: 0,
-                        bottom: 0,
-                        child: SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
-                      )
-                  ],
-                ),
-                const SizedBox(height: 16),
-                
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      _currentUser.displayName.isNotEmpty ? _currentUser.displayName : _currentUser.username,
-                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                            fontWeight: FontWeight.bold,
-                          ),
-                    ),
-                    if (_currentUser.groups.isNotEmpty) ...[
-                      const SizedBox(width: 8),
-                      // 这里的群组徽章会自动渲染为你网页版一模一样的真实皇冠和扳手！
-                      buildUserBadges(_currentUser.groups),
-                    ]
-                  ],
-                ),
-                
-                const SizedBox(height: 4),
-                Text(
-                  '@${_currentUser.username}',
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: scheme.outline,
-                      ),
-                ),
-                const SizedBox(height: 16),
-                
-                // [极度还原网页：使用 FontAwesome 的真实奖牌和点赞图标]
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF4B4844), 
-                    borderRadius: BorderRadius.circular(4), 
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const FaIcon(FontAwesomeIcons.medal, size: 14, color: Colors.white),
-                      const SizedBox(width: 6),
-                      Text(_currentUser.likesReceived, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
-                      
-                      const SizedBox(width: 16),
-                      
-                      const FaIcon(FontAwesomeIcons.solidThumbsUp, size: 13, color: Colors.amber),
-                      const SizedBox(width: 6),
-                      Text('${_currentUser.money} XSD', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const Divider(height: 1, thickness: 0.5, color: Color(0xFFE5E5EA)),
-          
-          ListTile(
-            leading: const Icon(Icons.history),
-            title: const Text('社区互动'),
-            trailing: const Icon(Icons.chevron_right, color: Colors.grey),
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => UserDiscussionsPage(user: _currentUser),
-                ),
-              );
-            },
-          ),
-          const Divider(height: 1, thickness: 0.5, color: Color(0xFFE5E5EA), indent: 56),
-          
-          ListTile(
-            leading: const Icon(Icons.settings),
-            title: const Text('设置'),
-            trailing: const Icon(Icons.chevron_right, color: Colors.grey),
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => const SettingsPage(),
-                ),
-              );
-            },
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class UserDiscussionsPage extends StatefulWidget {
-  final FlarumUser user;
-
-  const UserDiscussionsPage({super.key, required this.user});
-
-  @override
-  State<UserDiscussionsPage> createState() => _UserDiscussionsPageState();
-}
-
-class _UserDiscussionsPageState extends State<UserDiscussionsPage> {
-  final List<Discussion> _discussions = [];
-  bool _isLoading = true;
-  bool _loadingMore = false;
-  bool _hasMore = true;
-  int _page = 1;
-  String? _error;
-  final ScrollController _scrollController = ScrollController();
-
-  @override
-  void initState() {
-    super.initState();
-    _refresh();
-    _scrollController.addListener(_onScroll);
-  }
-
-  @override
-  void dispose() {
-    _scrollController.removeListener(_onScroll);
-    _scrollController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _refresh() async {
-    setState(() {
-      _isLoading = true;
-      _error = null;
-    });
-    try {
-      _page = 1;
-      final res = await apiClient.getDiscussions(page: 1, author: widget.user.username);
-      final list = parseDiscussionList(res, apiClient.baseUrl);
-      if (mounted) {
-        setState(() {
-          _discussions
-            ..clear()
-            ..addAll(list.items);
-          _hasMore = list.hasMore;
-          _isLoading = false;
-        });
-      }
-    } catch (_) {
-      if (mounted) setState(() {
-        _error = '加载失败，请检查网络';
-        _isLoading = false;
+  Future<void> _checkIfCurrentUser() async {
+    final currentUserId = await widget.api.getUserId();
+    if (mounted) {
+      setState(() {
+        _isCurrentUser = currentUserId != null && currentUserId.toString() == widget.user.id;
       });
     }
   }
 
-  void _onScroll() {
-    if (!_scrollController.hasClients) return;
-    if (_scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 200 &&
-        !_loadingMore &&
-        !_isLoading &&
-        _hasMore &&
-        _error == null) {
-      _loadMore();
-    }
-  }
-
-  Future<void> _loadMore() async {
-    setState(() => _loadingMore = true);
-    try {
-      final res = await apiClient.getDiscussions(page: _page + 1, author: widget.user.username);
-      final list = parseDiscussionList(res, apiClient.baseUrl);
-      if (mounted) {
-        setState(() {
-          _discussions.addAll(list.items);
-          _hasMore = list.hasMore;
-          _page += 1;
-        });
-      }
-    } catch (_) {
-    } finally {
-      if (mounted) setState(() => _loadingMore = false);
-    }
+  void _showComingSoon() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('该功能界面正在开发中...')),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: const Color(0xFFF2F2F7), // iOS 风格的底层灰
       appBar: AppBar(
-        title: const Text('社区互动', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
+        title: const Text('个人中心', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
         backgroundColor: Colors.white,
         surfaceTintColor: Colors.transparent,
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(0.5),
-          child: Container(color: const Color(0xFFE5E5EA), height: 0.5),
-        ),
+        elevation: 0,
+        centerTitle: true,
       ),
-      body: _buildBody(),
-    );
-  }
-
-  Widget _buildBody() {
-    if (_isLoading && _discussions.isEmpty) {
-      return const Center(child: CircularProgressIndicator());
-    }
-    if (_error != null && _discussions.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(_error!),
-            const SizedBox(height: 12),
-            FilledButton.tonal(onPressed: _refresh, child: const Text('重试')),
-          ],
-        ),
-      );
-    }
-    if (_discussions.isEmpty) {
-      return const Center(child: Text('暂无互动记录', style: TextStyle(color: Colors.grey)));
-    }
-
-    return ListView.separated(
-      controller: _scrollController,
-      padding: EdgeInsets.zero,
-      itemCount: _discussions.length + 1,
-      separatorBuilder: (_, __) => const Divider(height: 1, thickness: 0.5, color: Color(0xFFE5E5EA)),
-      itemBuilder: (context, index) {
-        if (index == _discussions.length) {
-          return _loadingMore
-              ? const Padding(padding: EdgeInsets.all(16), child: Center(child: CircularProgressIndicator()))
-              : const SizedBox(height: 24);
-        }
-        
-        final discussion = _discussions[index];
-        return InkWell(
-          onTap: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(builder: (context) => DiscussionDetailPage(api: apiClient, discussion: discussion)),
-            );
-          },
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  discussion.title,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15, height: 1.3),
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Icon(Icons.chat_bubble_outline, size: 14, color: Colors.grey.shade400),
-                    const SizedBox(width: 4),
-                    Text('${discussion.commentCount}', style: TextStyle(color: Colors.grey.shade500, fontSize: 12)),
-                    const SizedBox(width: 16),
-                    Icon(Icons.schedule, size: 14, color: Colors.grey.shade400),
-                    const SizedBox(width: 4),
-                    Text(formatRelativeTime(discussion.createdAt), style: TextStyle(color: Colors.grey.shade500, fontSize: 12)),
-                  ],
-                ),
-              ],
+      body: CustomScrollView(
+        slivers: [
+          // 头部个人信息卡片
+          SliverToBoxAdapter(
+            child: Container(
+              color: Colors.white,
+              padding: const EdgeInsets.only(top: 24, bottom: 32),
+              child: Column(
+                children: [
+                  _buildAvatar(),
+                  const SizedBox(height: 16),
+                  _buildUserInfo(),
+                  const SizedBox(height: 16),
+                  _buildAssetPill(),
+                ],
+              ),
             ),
           ),
-        );
-      },
-    );
-  }
-}
+          
+          // 列表区域
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 20.0),
+              child: Column(
+                children: [
+                  _buildSectionGroup(
+                    title: '论坛交流',
+                    items: [
+                      _MenuItem(icon: Icons.article_outlined, color: Colors.blueAccent, title: '发布的主题', onTap: _showComingSoon),
+                      _MenuItem(icon: Icons.chat_bubble_outline, color: Colors.lightBlue, title: '我的回复', onTap: _showComingSoon),
+                    ],
+                  ),
+                  const SizedBox(height: 24),
+                  
+                  _buildSectionGroup(
+                    title: '个人资产',
+                    items: [
+                      _MenuItem(icon: Icons.thumb_up_alt_outlined, color: Colors.orange, title: '收到的点赞', trailingText: widget.user.likesReceived, onTap: _showComingSoon),
+                      _MenuItem(icon: Icons.account_balance_wallet_outlined, color: Colors.amber, title: 'XSD 余额', trailingText: '${widget.user.money} XSD', onTap: _showComingSoon),
+                    ],
+                  ),
+                  const SizedBox(height: 24),
 
-class SettingsPage extends StatelessWidget {
-  const SettingsPage({super.key});
+                  _buildSectionGroup(
+                    title: '打赏详情',
+                    items: [
+                      _MenuItem(icon: Icons.card_giftcard, color: Colors.redAccent, title: '收到的打赏', onTap: _showComingSoon),
+                      _MenuItem(icon: Icons.outbox, color: Colors.pinkAccent, title: '发出的打赏', onTap: _showComingSoon),
+                    ],
+                  ),
+                  const SizedBox(height: 24),
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.white,
-      appBar: AppBar(
-        title: const Text('设置', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
-        backgroundColor: Colors.white,
-        surfaceTintColor: Colors.transparent,
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(0.5),
-          child: Container(color: const Color(0xFFE5E5EA), height: 0.5),
-        ),
-      ),
-      body: ListView(
-        children: [
-          ListTile(
-            title: const Text('退出登录', style: TextStyle(color: Colors.red)),
-            leading: const Icon(Icons.exit_to_app, color: Colors.red),
-            onTap: () {
-              showDialog(
-                context: context,
-                builder: (context) => AlertDialog(
-                  backgroundColor: Colors.white,
-                  surfaceTintColor: Colors.transparent,
-                  title: const Text('退出登录'),
-                  content: const Text('确定要退出当前账号吗？'),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(context),
-                      child: const Text('取消', style: TextStyle(color: Colors.grey)),
+                  _buildSectionGroup(
+                    title: '站务警告',
+                    items: [
+                      _MenuItem(icon: Icons.warning_amber_rounded, color: Colors.red, title: '收到的警告', onTap: _showComingSoon),
+                      // 仅针对管理层或特定需求展示“发出的警告”
+                      _MenuItem(icon: Icons.gavel, color: Colors.brown, title: '发出的警告', onTap: _showComingSoon),
+                    ],
+                  ),
+                  const SizedBox(height: 24),
+
+                  // 仅当前用户本人可见的设置项
+                  if (_isCurrentUser)
+                    _buildSectionGroup(
+                      title: '系统设置',
+                      items: [
+                        _MenuItem(icon: Icons.settings_outlined, color: Colors.grey.shade700, title: '账号设置', onTap: _showComingSoon),
+                        _MenuItem(
+                          icon: Icons.exit_to_app, 
+                          color: Colors.red, 
+                          title: '退出登录', 
+                          textColor: Colors.red,
+                          hideArrow: true,
+                          onTap: () async {
+                            await widget.api.logout();
+                            if (mounted) {
+                              Navigator.of(context).popUntil((route) => route.isFirst);
+                            }
+                          },
+                        ),
+                      ],
                     ),
-                    FilledButton(
-                      style: FilledButton.styleFrom(backgroundColor: Colors.red),
-                      onPressed: () async {
-                        await apiClient.logout();
-                        if (context.mounted) {
-                          Navigator.pushAndRemoveUntil(
-                            context,
-                            MaterialPageRoute(builder: (context) => const XSOPForumApp()),
-                            (route) => false,
-                          );
-                        }
-                      },
-                      child: const Text('确定退出'),
-                    ),
-                  ],
-                ),
-              );
-            },
+                  
+                  const SizedBox(height: 40), // 底部留白
+                ],
+              ),
+            ),
           ),
         ],
       ),
     );
   }
+
+  // 构建头像
+  Widget _buildAvatar() {
+    final name = widget.user.displayName.isNotEmpty ? widget.user.displayName : widget.user.username;
+    final letter = name.isNotEmpty ? name[0].toUpperCase() : '?';
+
+    return CircleAvatar(
+      radius: 46,
+      backgroundColor: Colors.grey.shade200,
+      backgroundImage: widget.user.avatarUrl != null ? NetworkImage(widget.user.avatarUrl!) : null,
+      child: widget.user.avatarUrl == null
+          ? Text(letter, style: TextStyle(fontSize: 32, color: Theme.of(context).colorScheme.primary, fontWeight: FontWeight.bold))
+          : null,
+    );
+  }
+
+  // 构建用户信息（昵称、用户名、徽章）
+  Widget _buildUserInfo() {
+    return Column(
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              widget.user.displayName.isNotEmpty ? widget.user.displayName : widget.user.username,
+              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.black87),
+            ),
+            if (widget.user.groups.isNotEmpty) ...[
+              const SizedBox(width: 8),
+              buildUserBadges(widget.user.groups),
+            ]
+          ],
+        ),
+        const SizedBox(height: 4),
+        Text(
+          '@${widget.user.username}',
+          style: TextStyle(fontSize: 14, color: Colors.grey.shade500),
+        ),
+      ],
+    );
+  }
+
+  // 构建资产胶囊（完美还原图片中的深色块 UI）
+  Widget _buildAssetPill() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF4A4A4A), // 深灰色底
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.workspace_premium, size: 14, color: Colors.white),
+          const SizedBox(width: 4),
+          Text(widget.user.badgesCount, style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+          const SizedBox(width: 12),
+          
+          const Icon(Icons.thumb_up, size: 14, color: Colors.orangeAccent),
+          const SizedBox(width: 4),
+          Text(widget.user.likesReceived, style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+          const SizedBox(width: 12),
+          
+          Text('${widget.user.money} XSD', style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+        ],
+      ),
+    );
+  }
+
+  // 构建分组卡片
+  Widget _buildSectionGroup({required String title, required List<_MenuItem> items}) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: 12, bottom: 8),
+          child: Text(
+            title,
+            style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.grey.shade600),
+          ),
+        ),
+        Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(12),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.02),
+                blurRadius: 10,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: Column(
+            children: List.generate(items.length, (index) {
+              final item = items[index];
+              return Column(
+                children: [
+                  ListTile(
+                    onTap: item.onTap,
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+                    leading: Icon(item.icon, color: item.color, size: 24),
+                    title: Text(item.title, style: TextStyle(fontSize: 15, color: item.textColor ?? Colors.black87, fontWeight: FontWeight.w500)),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (item.trailingText != null)
+                          Text(item.trailingText!, style: TextStyle(fontSize: 15, color: Colors.grey.shade500)),
+                        if (item.trailingText != null && !item.hideArrow)
+                          const SizedBox(width: 8),
+                        if (!item.hideArrow)
+                          Icon(Icons.arrow_forward_ios, size: 14, color: Colors.grey.shade400),
+                      ],
+                    ),
+                  ),
+                  if (index < items.length - 1)
+                    Divider(height: 1, thickness: 0.5, color: Colors.grey.shade200, indent: 56),
+                ],
+              );
+            }),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// 菜单项数据模型
+class _MenuItem {
+  final IconData icon;
+  final Color color;
+  final String title;
+  final String? trailingText;
+  final Color? textColor;
+  final bool hideArrow;
+  final VoidCallback onTap;
+
+  _MenuItem({
+    required this.icon,
+    required this.color,
+    required this.title,
+    this.trailingText,
+    this.textColor,
+    this.hideArrow = false,
+    required this.onTap,
+  });
 }
