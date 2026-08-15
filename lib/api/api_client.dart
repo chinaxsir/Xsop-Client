@@ -126,18 +126,27 @@ class ApiClient {
     await _dio.post('/api/warnings', data: data);
   }
 
-  // [修复：支持第三方打赏插件的标准 JSON 格式提交]
+  // [兼容修复：暴力的打赏探针，挨个测试 Flarum 插件最常用的打赏/转账 API 格式]
   Future<void> tipPost(int postId, int amount) async {
-    try {
-      await _dio.post('/api/tips', data: {
-        "data": {"type": "tips", "attributes": {"amount": amount}, "relationships": {"post": {"data": {"type": "posts", "id": postId.toString()}}}}
-      });
-    } catch (e) {
-      // 兼容某些老旧插件的回退路由
-      await _dio.post('/api/posts/$postId/tip', data: {
-        "data": {"attributes": {"amount": amount}}
-      });
+    DioException? lastErr;
+    final payloads = [
+      {"data": {"type": "tips", "attributes": {"amount": amount}, "relationships": {"post": {"data": {"type": "posts", "id": postId.toString()}}}}},
+      {"data": {"attributes": {"amount": amount}}},
+      {"amount": amount}
+    ];
+    final endpoints = ['/api/tips', '/api/posts/$postId/tip', '/api/money-transfers'];
+
+    for (final ep in endpoints) {
+      for (final p in payloads) {
+        try {
+          await _dio.post(ep, data: p);
+          return;
+        } on DioException catch (e) {
+          lastErr = e;
+        }
+      }
     }
+    if (lastErr != null) throw lastErr;
   }
 
   Future<void> reportPost(int postId, String reason, String? detail) async {
