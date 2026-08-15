@@ -38,98 +38,78 @@ class _UserActivityPageState extends State<UserActivityPage> {
     _loadData();
   }
 
-  // [无畏降级探针] 先带 include 请求，遇到服务器 400（比如不兼容的插件结构）自动去掉 include 进行纯净版保底请求
-  Future<void> _aggressiveFetch(List<String> endpoints, String includes) async {
-    List<dynamic> allData = [];
-    List<dynamic> allIncluded = [];
-    final uid = widget.user.id;
-    
-    // Flarum 插件极度分裂，我们要照顾到 filter[user], filter[recipient] 甚至是 /api/users/{id} 节点
-    final queries = [
-      {'filter[user]': uid, 'include': includes},
-      {'filter[recipient]': uid, 'include': includes},
-      {'filter[sender]': uid, 'include': includes},
-      {'include': includes} 
-    ];
-
-    for (final ep in endpoints) {
-      for (final q in queries) {
-        try {
-          final res = await widget.api.getDynamicList(ep, queryParameters: q);
-          allData.addAll(res['data'] ?? []);
-          allIncluded.addAll(res['included'] ?? []);
-        } catch (_) {}
-        
-        // 保底措施：不带 include（避免 400 Bad Request）
-        try {
-          final qNoInclude = Map<String, dynamic>.from(q)..remove('include');
-          final res = await widget.api.getDynamicList(ep, queryParameters: qNoInclude);
-          allData.addAll(res['data'] ?? []);
-          allIncluded.addAll(res['included'] ?? []);
-        } catch (_) {}
+  // [无畏降级探针] 先带 include 请求，遇到服务器报错自动降级
+  Future<Map<String, dynamic>> _safeFetch(String endpoint, Map<String, dynamic> query) async {
+    try {
+      return await widget.api.getDynamicList(endpoint, queryParameters: query);
+    } catch (e) {
+      if (e is DioException && (e.response?.statusCode == 400 || e.response?.statusCode == 500)) {
+         try {
+           final q = Map<String, dynamic>.from(query)..remove('include');
+           return await widget.api.getDynamicList(endpoint, queryParameters: q);
+         } catch (_) {}
       }
+      return {'data': []}; 
     }
-    
-    final Map<String, dynamic> uniqueData = {};
-    for (var item in allData) {
-      if (item != null && item['id'] != null) uniqueData[item['id'].toString()] = item;
-    }
-    
-    final Map<String, dynamic> uniqueIncluded = {};
-    for (var item in allIncluded) {
-      if (item != null && item['id'] != null && item['type'] != null) {
-        uniqueIncluded['${item['type']}_${item['id']}'] = item;
-      }
-    }
-
-    _included = uniqueIncluded.values.toList();
-    _items = uniqueData.values.toList();
-    
-    _items.sort((a, b) {
-      final timeA = a['attributes']?['createdAt'];
-      final timeB = b['attributes']?['createdAt'];
-      if (timeA == null) return 1;
-      if (timeB == null) return -1;
-      return DateTime.parse(timeB).compareTo(DateTime.parse(timeA));
-    });
   }
 
   Future<void> _loadData() async {
     setState(() { _isLoading = true; _error = null; });
     try {
+      final uid = widget.user.id;
+      
       if (widget.activityType == 'discussions') {
         final res = await widget.api.getDynamicList('/api/discussions', queryParameters: {'filter[q]': 'author:${widget.user.username}'});
         _items = res['data'] ?? [];
         _included = res['included'] ?? [];
         _customEmptyMessage = '该账号暂未发布任何主题。';
       } else if (widget.activityType == 'posts') {
-        // [极度安全的回复提取机制：加上 filter[type]=comment 过滤干扰项目]
-        try {
-          final res = await widget.api.getDynamicList('/api/posts', queryParameters: {
-            'filter[user]': widget.user.id, 
-            'filter[type]': 'comment', 
-            'include': 'discussion'
-          });
-          _items = res['data'] ?? [];
-          _included = res['included'] ?? [];
-        } catch (_) {
-          // 保底纯净抓取
-          final res = await widget.api.getDynamicList('/api/posts', queryParameters: {
-            'filter[user]': widget.user.id,
-            'filter[type]': 'comment',
-          });
-          _items = res['data'] ?? [];
-          _included = res['included'] ?? [];
-        }
-        _customEmptyMessage = '暂无回复记录。';
+        // [极度安全的串号拦截系统：用双重保险拒绝任何非当前用户的假回帖]
+        final res = await widget.api.getDynamicList('/api/posts', queryParameters: {'filter[user]': uid, 'filter[type]': 'comment', 'include': 'discussion'});
+        final rawPosts = res['data'] as List<dynamic>? ?? [];
+        
+        _items = rawPosts.where((p) {
+           final relUserId = p['relationships']?['user']?['data']?['id']?.toString();
+           return relUserId == uid; // 铁律：不是自己的回帖立刻丢弃
+        }).toList();
+        
+        _included = res['included'] ?? [];
+        _customEmptyMessage = '无回复记录。';
       } else if (widget.activityType == 'warnings') {
-        // [图4/图5 修复点：将 Flarum Warn 的用户专属隐藏节点一起丢进去扒数据]
-        await _aggressiveFetch(['/api/warnings', '/api/user-warnings', '/api/users/${widget.user.id}/warnings'], 'addedByUser,post,post.discussion');
+        // 覆盖主流 Flarum 的各种警告查询路径
+        final res1 = await _safeFetch('/api/warnings', {'filter[user]': uid, 'include': 'addedByUser,post'});
+        final res2 = await _safeFetch('/api/users/$uid/warnings', {'include': 'addedByUser,post'});
+        
+        final Map<String, dynamic> uniqueMap = {};
+        for(var i in [...(res1['data'] ?? []), ...(res2['data'] ?? [])]) {
+          if (i['id'] != null) uniqueMap[i['id'].toString()] = i;
+        }
+        _items = uniqueMap.values.toList();
+        _included = [...(res1['included'] ?? []), ...(res2['included'] ?? [])];
         _customEmptyMessage = '暂无任何站务违规记录。';
       } else if (widget.activityType == 'tips') {
-        // 同理覆盖打赏的所有可能路径
-        await _aggressiveFetch(['/api/tips', '/api/rewards', '/api/moneyHistory', '/api/money-transfers', '/api/transactions', '/api/users/${widget.user.id}/tips'], 'sender,recipient,post,post.discussion');
+        final res1 = await _safeFetch('/api/tips', {'filter[user]': uid, 'include': 'sender,recipient,post'});
+        final res2 = await _safeFetch('/api/moneyHistory', {'filter[user]': uid});
+        final res3 = await _safeFetch('/api/users/$uid/tips', {'include': 'sender,recipient,post'});
+        
+        final Map<String, dynamic> uniqueMap = {};
+        for(var i in [...(res1['data'] ?? []), ...(res2['data'] ?? []), ...(res3['data'] ?? [])]) {
+          if (i['id'] != null) uniqueMap[i['id'].toString()] = i;
+        }
+        _items = uniqueMap.values.toList();
+        _included = [...(res1['included'] ?? []), ...(res2['included'] ?? []), ...(res3['included'] ?? [])];
         _customEmptyMessage = '暂无打赏或财富流通流水。';
+      }
+
+      if (_items.isNotEmpty) {
+        // [修复图1/图2 死转圈崩溃：加入了日期空值防御，绝不再报错阻断]
+        _items.sort((a, b) {
+          final timeA = a['attributes']?['createdAt'];
+          final timeB = b['attributes']?['createdAt'];
+          final dateA = timeA != null ? DateTime.tryParse(timeA.toString()) ?? DateTime.fromMillisecondsSinceEpoch(0) : DateTime.fromMillisecondsSinceEpoch(0);
+          final dateB = timeB != null ? DateTime.tryParse(timeB.toString()) ?? DateTime.fromMillisecondsSinceEpoch(0) : DateTime.fromMillisecondsSinceEpoch(0);
+          return dateB.compareTo(dateA);
+        });
       }
 
       if (mounted) setState(() => _isLoading = false);
@@ -190,7 +170,14 @@ class _UserActivityPageState extends State<UserActivityPage> {
             const SizedBox(height: 16),
             Text(_error!, style: TextStyle(color: Colors.grey.shade500, fontSize: 14)),
             const SizedBox(height: 16),
-            FilledButton.tonal(onPressed: _loadData, child: const Text('重新加载')),
+            FilledButton.tonal(
+              onPressed: () async {
+                 setState(() { _isLoading = true; _error = null; });
+                 await Future.delayed(const Duration(milliseconds: 400));
+                 _loadData();
+              }, 
+              child: const Text('重新加载网络数据')
+            ),
           ],
         ),
       );
@@ -244,7 +231,7 @@ class _UserActivityPageState extends State<UserActivityPage> {
     final strikes = attrs['strikes'] ?? 0;
     final comment = attrs['publicComment'] ?? attrs['reason'] ?? '违反社区发帖规范。';
     final timeStr = attrs['createdAt'];
-    final timeDisplay = timeStr != null ? formatRelativeTime(DateTime.parse(timeStr)) : '时间丢失';
+    final timeDisplay = timeStr != null ? formatRelativeTime(DateTime.tryParse(timeStr.toString()) ?? DateTime.now()) : '时间丢失';
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16),
@@ -273,11 +260,11 @@ class _UserActivityPageState extends State<UserActivityPage> {
     final attrs = item['attributes'] ?? {};
     final amount = attrs['amount']?.toString() ?? attrs['money']?.toString() ?? '0';
     final timeStr = attrs['createdAt'];
-    final timeDisplay = timeStr != null ? formatRelativeTime(DateTime.parse(timeStr)) : '未知';
+    final timeDisplay = timeStr != null ? formatRelativeTime(DateTime.tryParse(timeStr.toString()) ?? DateTime.now()) : '未知';
 
     final senderId = item['relationships']?['sender']?['data']?['id']?.toString() ?? attrs['senderId']?.toString();
     final sender = _getIncluded('users', senderId);
-    final senderName = sender?['attributes']?['displayName'] ?? sender?['attributes']?['username'] ?? '某位用户';
+    final senderName = sender?['attributes']?['displayName'] ?? sender?['attributes']?['username'] ?? '账户';
 
     final recipientId = item['relationships']?['recipient']?['data']?['id']?.toString() ?? attrs['recipientId']?.toString();
     final recipient = _getIncluded('users', recipientId);
@@ -309,7 +296,7 @@ class _UserActivityPageState extends State<UserActivityPage> {
   Widget _buildPostItem(Map<String, dynamic> item) {
     final attrs = item['attributes'] ?? {};
     final timeStr = attrs['createdAt'];
-    final timeDisplay = timeStr != null ? formatRelativeTime(DateTime.parse(timeStr)) : '';
+    final timeDisplay = timeStr != null ? formatRelativeTime(DateTime.tryParse(timeStr.toString()) ?? DateTime.now()) : '';
 
     String discussionTitle = '原始帖子未找到';
     final discussionId = attrs['discussionId']?.toString() ?? item['relationships']?['discussion']?['data']?['id']?.toString();
@@ -318,62 +305,52 @@ class _UserActivityPageState extends State<UserActivityPage> {
       if (dNode != null) discussionTitle = dNode['attributes']?['title'] ?? '原始帖子未找到';
     }
 
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(8),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 8, offset: const Offset(0, 2))],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          InkWell(
-            onTap: () {
-              if (discussionId != null) {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => DiscussionDetailPage(
-                      api: widget.api,
-                      discussion: Discussion(
-                        id: discussionId, 
-                        title: discussionTitle,
-                        commentCount: 0, 
-                        createdAt: timeStr != null ? DateTime.tryParse(timeStr) ?? DateTime.now() : DateTime.now(),
-                        tags: const [], 
-                      ),
-                    ),
-                  ),
-                );
-              }
-            },
-            child: Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              decoration: BoxDecoration(
-                color: Colors.red.shade50.withOpacity(0.3),
-                border: Border.all(color: Colors.red.shade100, width: 1.5),
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
-              ),
-              child: Text.rich(
-                TextSpan(
-                  children: [
-                    const TextSpan(text: '在「', style: TextStyle(color: Colors.black87, fontWeight: FontWeight.w500)),
-                    TextSpan(text: discussionTitle, style: const TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.w600)),
-                    const TextSpan(text: '」主题中的回复', style: TextStyle(color: Colors.black87, fontWeight: FontWeight.w500)),
-                  ],
+    return InkWell(
+      onTap: () {
+        if (discussionId != null) {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => DiscussionDetailPage(
+                api: widget.api,
+                discussion: Discussion(
+                  id: discussionId, 
+                  title: discussionTitle,
+                  commentCount: 0, 
+                  createdAt: timeStr != null ? DateTime.tryParse(timeStr.toString()) ?? DateTime.now() : DateTime.now(),
+                  tags: const [], 
                 ),
-                style: const TextStyle(fontSize: 14),
               ),
             ),
-          ),
-          
-          Padding(
-            padding: const EdgeInsets.only(left: 16, right: 16, top: 12, bottom: 12),
-            child: Text('回复于 $timeDisplay (点击标题可跳转原帖)', style: TextStyle(fontSize: 12, color: Colors.grey.shade400)),
-          ),
-        ],
+          );
+        }
+      },
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 16),
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          border: Border.all(color: Colors.red.shade100, width: 2),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text.rich(
+              TextSpan(
+                children: [
+                  const TextSpan(text: '在「', style: TextStyle(color: Colors.black87, fontWeight: FontWeight.w500)),
+                  TextSpan(text: discussionTitle, style: const TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.w600)),
+                  const TextSpan(text: '」主题中的回复', style: TextStyle(color: Colors.black87, fontWeight: FontWeight.w500)),
+                ],
+              ),
+              style: const TextStyle(fontSize: 15, height: 1.4),
+            ),
+            const SizedBox(height: 8),
+            Text('回复于 $timeDisplay (点击可跳转)', style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
+          ],
+        ),
       ),
     );
   }
@@ -381,7 +358,7 @@ class _UserActivityPageState extends State<UserActivityPage> {
   Widget _buildDefaultItem(Map<String, dynamic> item) {
     final attrs = item['attributes'] ?? {};
     final timeStr = attrs['createdAt'];
-    final timeDisplay = timeStr != null ? formatRelativeTime(DateTime.parse(timeStr)) : '';
+    final timeDisplay = timeStr != null ? formatRelativeTime(DateTime.tryParse(timeStr.toString()) ?? DateTime.now()) : '';
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16),
