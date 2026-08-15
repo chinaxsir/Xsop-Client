@@ -29,7 +29,8 @@ class _EditorPageState extends State<EditorPage> {
   bool _isLoadingTags = false;
   String? _tagError;
   
-  List<FlarumTag> _tags = [];
+  List<FlarumTag> _primaryTags = [];
+  List<FlarumTag> _secondaryTags = [];
   List<FlarumTag> _selectedTags = [];
 
   bool get isReply => widget.discussion != null;
@@ -39,11 +40,16 @@ class _EditorPageState extends State<EditorPage> {
     super.initState();
     if (!isReply) {
       if (widget.availableTags != null && widget.availableTags!.isNotEmpty) {
-        _tags = widget.availableTags!;
+        _categorizeTags(widget.availableTags!);
       } else {
         _fetchTags();
       }
     }
+  }
+
+  void _categorizeTags(List<FlarumTag> tags) {
+    _primaryTags = tags.where((t) => t.isPrimary).toList();
+    _secondaryTags = tags.where((t) => !t.isPrimary).toList();
   }
 
   Future<void> _fetchTags() async {
@@ -52,14 +58,14 @@ class _EditorPageState extends State<EditorPage> {
       final res = await widget.api.getTags();
       if (mounted) {
         setState(() {
-          _tags = parseTags(res);
+          _categorizeTags(parseTags(res));
           _isLoadingTags = false;
         });
       }
     } catch (e) {
       if (mounted) {
         setState(() {
-          _tagError = '未能成功载入系统分类标签，网络通信链路可能存在异常。';
+          _tagError = '无法获取板块标签，网络可能已断开。';
           _isLoadingTags = false;
         });
       }
@@ -71,15 +77,16 @@ class _EditorPageState extends State<EditorPage> {
     final content = _contentController.text.trim();
 
     if (content.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请录入有效的内容数据')));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('正文内容不能为空')));
       return;
     }
     if (!isReply && title.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请设置有效的实体标题')));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请输入具有描述性的标题')));
       return;
     }
-    if (!isReply && _selectedTags.isEmpty && _tags.isNotEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请为当前实体分配归属标签')));
+    // Flarum 网页版通常强制要求至少选择一个主标签
+    if (!isReply && _selectedTags.where((t) => t.isPrimary).isEmpty && _primaryTags.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请至少选择一个主标签')));
       return;
     }
 
@@ -93,12 +100,12 @@ class _EditorPageState extends State<EditorPage> {
         await widget.api.createDiscussion(title: title, content: content, tagIds: tagIds);
       }
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('业务数据提交成功')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(isReply ? '回复成功' : '发布成功')));
         Navigator.pop(context, true);
       }
     } on DioException catch (e) {
-      String errMsg = '数据上传失败，请检视通信状态';
-      if (e.response?.statusCode == 403) errMsg = '权限检验不通过：无权执行该写入操作';
+      String errMsg = '发布失败，请检查网络';
+      if (e.response?.statusCode == 403) errMsg = '权限不足：您无权在当前板块发帖或回复';
       try {
         final errs = e.response?.data['errors'];
         if (errs != null && errs is List && errs.isNotEmpty && errs[0]['detail'] != null) {
@@ -111,12 +118,31 @@ class _EditorPageState extends State<EditorPage> {
     }
   }
 
+  // [富文本工具扩展] 插入格式化代码
+  void _insertMarkdown(String prefix, String suffix) {
+    final text = _contentController.text;
+    final selection = _contentController.selection;
+    
+    int start = selection.start;
+    int end = selection.end;
+    if (start == -1 || end == -1) {
+      start = text.length;
+      end = text.length;
+    }
+
+    final newText = text.replaceRange(start, end, '$prefix${text.substring(start, end)}$suffix');
+    _contentController.value = TextEditingValue(
+      text: newText,
+      selection: TextSelection.collapsed(offset: start + prefix.length + (end - start)),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
-        title: Text(isReply ? '追加事务日志' : '新建系统业务实体', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+        title: Text(isReply ? '回复主题' : '发布新主题', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
         backgroundColor: Colors.white,
         surfaceTintColor: Colors.transparent,
         actions: [
@@ -126,7 +152,7 @@ class _EditorPageState extends State<EditorPage> {
               onPressed: _isSubmitting ? null : _submit,
               child: _isSubmitting 
                   ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                  : const Text('执行提交'),
+                  : const Text('发送'),
             ),
           )
         ],
@@ -143,14 +169,77 @@ class _EditorPageState extends State<EditorPage> {
                 maxLines: null,
                 expands: true,
                 decoration: InputDecoration(
-                  hintText: isReply ? '请输入追加日志的内容信息 (系统已集成 Markdown 解析引擎)...' : '请输入详细的业务阐述 (系统已集成 Markdown 解析引擎)...',
+                  hintText: '分享你的想法（支持 Markdown 语法）...',
                   border: InputBorder.none,
                   hintStyle: TextStyle(color: Colors.grey.shade400),
                 ),
               ),
             ),
           ),
+          _buildToolbar(),
         ],
+      ),
+    );
+  }
+
+  // [核心修复：还原原汁原味的 Flarum 底部功能拓展条（上传、发图、收费）]
+  Widget _buildToolbar() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border(top: BorderSide(color: Colors.grey.shade200)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: [
+              IconButton(
+                icon: const Icon(Icons.format_bold, color: Colors.black87),
+                tooltip: '加粗',
+                onPressed: () => _insertMarkdown('**', '**'),
+              ),
+              IconButton(
+                icon: const Icon(Icons.format_italic, color: Colors.black87),
+                tooltip: '斜体',
+                onPressed: () => _insertMarkdown('*', '*'),
+              ),
+              IconButton(
+                icon: const Icon(Icons.link, color: Colors.black87),
+                tooltip: '插入链接',
+                onPressed: () => _insertMarkdown('[', '](https://)'),
+              ),
+              Container(width: 1, height: 24, color: Colors.grey.shade300, margin: const EdgeInsets.symmetric(horizontal: 8)),
+              IconButton(
+                icon: const Icon(Icons.image_outlined, color: Colors.black87),
+                tooltip: '插入图片',
+                onPressed: () {
+                  // TODO: 后续可在此接入 image_picker 进行图片直传
+                  _insertMarkdown('![图片描述](', ')');
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已插入图片语法，请填入图片链接')));
+                },
+              ),
+              IconButton(
+                icon: const Icon(Icons.attach_file, color: Colors.black87),
+                tooltip: '上传附件',
+                onPressed: () {
+                  // TODO: 后续可在此接入 file_picker 进行文件直传
+                  _insertMarkdown('[点击下载附件](', ')');
+                },
+              ),
+              Container(width: 1, height: 24, color: Colors.grey.shade300, margin: const EdgeInsets.symmetric(horizontal: 8)),
+              TextButton.icon(
+                icon: const Icon(Icons.lock_outline, size: 18, color: Colors.orange),
+                label: const Text('付费阅读', style: TextStyle(color: Colors.orange)),
+                onPressed: () {
+                  _insertMarkdown('[charge=10]\n在这里输入需要付费查阅的核心内容...\n', '[/charge]');
+                },
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -174,7 +263,7 @@ class _EditorPageState extends State<EditorPage> {
                  await Future.delayed(const Duration(milliseconds: 400));
                  _fetchTags();
               }, 
-              child: const Text('重新发起通信请求')
+              child: const Text('重新获取')
             )
           ],
         ),
@@ -190,37 +279,60 @@ class _EditorPageState extends State<EditorPage> {
             controller: _titleController,
             style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             decoration: InputDecoration(
-              hintText: '请输入具有高标识度的系统标题...',
+              hintText: '请输入具有描述性的标题...',
               border: InputBorder.none,
               hintStyle: TextStyle(color: Colors.grey.shade400),
             ),
           ),
         ),
-        if (_tags.isNotEmpty)
+        if (_primaryTags.isNotEmpty || _secondaryTags.isNotEmpty)
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-            child: Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: _tags.map((tag) {
-                final isSelected = _selectedTags.contains(tag);
-                return FilterChip(
-                  label: Text(tag.name),
-                  selected: isSelected,
-                  onSelected: (val) {
-                    setState(() {
-                      if (val) {
-                        _selectedTags.add(tag);
-                      } else {
-                        _selectedTags.remove(tag);
-                      }
-                    });
-                  },
-                );
-              }).toList(),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (_primaryTags.isNotEmpty) ...[
+                  Text('主标签 (必选)', style: TextStyle(fontSize: 12, color: Colors.grey.shade500, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8, runSpacing: 8,
+                    children: _primaryTags.map((t) => _buildTagChip(t)).toList(),
+                  ),
+                ],
+                if (_secondaryTags.isNotEmpty) ...[
+                  const SizedBox(height: 16),
+                  Text('次级标签 (可选)', style: TextStyle(fontSize: 12, color: Colors.grey.shade500, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8, runSpacing: 8,
+                    children: _secondaryTags.map((t) => _buildTagChip(t)).toList(),
+                  ),
+                ],
+              ],
             ),
           ),
       ],
+    );
+  }
+
+  Widget _buildTagChip(FlarumTag tag) {
+    final isSelected = _selectedTags.contains(tag);
+    return FilterChip(
+      label: Text(tag.name),
+      selected: isSelected,
+      onSelected: (val) {
+        setState(() {
+          if (val) {
+            // Flarum 一般限制只能选一个主标签，我们在前端可以放宽或者严格限制
+            if (tag.isPrimary) {
+               _selectedTags.removeWhere((t) => t.isPrimary);
+            }
+            _selectedTags.add(tag);
+          } else {
+            _selectedTags.remove(tag);
+          }
+        });
+      },
     );
   }
 }
