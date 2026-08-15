@@ -2,6 +2,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
+import 'package:image_picker/image_picker.dart'; // 引入真实的媒体选择器
 import 'package:xsop_forum/api/api_client.dart';
 import 'package:xsop_forum/models/flarum_models.dart';
 
@@ -26,6 +27,7 @@ class _EditorPageState extends State<EditorPage> {
   final _contentController = TextEditingController();
   
   bool _isSubmitting = false;
+  bool _isUploading = false; // 真实上传状态
   bool _isLoadingTags = false;
   String? _tagError;
   
@@ -57,12 +59,7 @@ class _EditorPageState extends State<EditorPage> {
         });
       }
     } catch (e) {
-      if (mounted) {
-        setState(() {
-          _tagError = '无法拉取版块标签数据，请下拉重试。';
-          _isLoadingTags = false;
-        });
-      }
+      if (mounted) setState(() { _tagError = '无法获取板块标签，请下拉重试。'; _isLoadingTags = false; });
     }
   }
 
@@ -71,15 +68,14 @@ class _EditorPageState extends State<EditorPage> {
     final content = _contentController.text.trim();
 
     if (content.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('正文不能为空')));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请输入内容')));
       return;
     }
     if (!isReply && title.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('标题不能为空')));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请输入标题')));
       return;
     }
-    
-    // 取消曾经苛刻的本地拦截限制，让服务端判定权限，用户即可畅快点击
+
     setState(() => _isSubmitting = true);
 
     try {
@@ -90,7 +86,7 @@ class _EditorPageState extends State<EditorPage> {
         await widget.api.createDiscussion(title: title, content: content, tagIds: tagIds);
       }
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(isReply ? '回复成功' : '主题发布成功')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(isReply ? '回复成功' : '发布成功')));
         Navigator.pop(context, true);
       }
     } on DioException catch (e) {
@@ -123,16 +119,41 @@ class _EditorPageState extends State<EditorPage> {
     );
   }
 
-  // [图3核心修复：当点选 Cash 等付费标签时，自动插入模板预设语法]
+  // [深刻修复：接入手机底层相册，真枪实弹上传到服务器！]
+  Future<void> _pickAndUploadImage() async {
+    final picker = ImagePicker();
+    final pickedFile = await picker.pickImage(source: ImageSource.gallery);
+    if (pickedFile == null) return;
+
+    setState(() => _isUploading = true);
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('正在上传图片，请稍候...')));
+
+    try {
+      final uploadRes = await widget.api.uploadFile(pickedFile.path, filename: pickedFile.name);
+      if (uploadRes != null && uploadRes['url'] != null) {
+        // 成功获取服务器 URL，回填至输入框
+        final url = uploadRes['url'];
+        final baseName = uploadRes['baseName'];
+        _insertMarkdown('![$baseName]($url)', '\n');
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('图片上传成功！')));
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('图片上传失败，服务器返回空数据。')));
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('上传异常：可能未配置图床或文件超出限制')));
+    } finally {
+      setState(() => _isUploading = false);
+    }
+  }
+
   void _handleTagSelection(FlarumTag tag, bool isSelected) {
     setState(() {
       if (isSelected) {
         _selectedTags.add(tag);
-        // 如果侦测到 Cash/收费 标签，自动拉取并注入设定好的费用查阅模板
         if (tag.slug.toLowerCase().contains('cash') || tag.name.contains('收费')) {
            if (!_contentController.text.contains('[charge=')) {
-              _contentController.text += '\n[charge=10]\n在这里输入需要付费查阅的核心内容...\n[/charge]\n';
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已自动拉取并插入付费阅读(Cash)语法模板')));
+              _contentController.text += '\n[charge=10]\n隐藏内容\n[/charge]\n';
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已自动拉取付费阅读模板')));
            }
         }
       } else {
@@ -153,8 +174,10 @@ class _EditorPageState extends State<EditorPage> {
           Padding(
             padding: const EdgeInsets.only(right: 16, top: 8, bottom: 8),
             child: FilledButton(
-              onPressed: _isSubmitting ? null : _submit,
-              child: _isSubmitting ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('发送'),
+              onPressed: (_isSubmitting || _isUploading) ? null : _submit,
+              child: _isSubmitting 
+                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  : const Text('发送'),
             ),
           )
         ],
@@ -162,6 +185,7 @@ class _EditorPageState extends State<EditorPage> {
       body: Column(
         children: [
           if (!isReply) _buildHeader(),
+          if (_isUploading) const LinearProgressIndicator(minHeight: 2), // 顶部加入真实的上传进度条
           const Divider(height: 1, thickness: 0.5, color: Color(0xFFE5E5EA)),
           Expanded(
             child: Padding(
@@ -198,16 +222,19 @@ class _EditorPageState extends State<EditorPage> {
               IconButton(icon: const Icon(Icons.format_italic, color: Colors.black87), tooltip: '斜体', onPressed: () => _insertMarkdown('*', '*')),
               IconButton(icon: const Icon(Icons.link, color: Colors.black87), tooltip: '插入链接', onPressed: () => _insertMarkdown('[', '](https://)')),
               Container(width: 1, height: 24, color: Colors.grey.shade300, margin: const EdgeInsets.symmetric(horizontal: 8)),
-              IconButton(icon: const Icon(Icons.image_outlined, color: Colors.black87), tooltip: '上传图片', onPressed: () {
-                  _insertMarkdown('![图片描述](', ')');
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已插入图床结构')));
-              }),
-              IconButton(icon: const Icon(Icons.attach_file, color: Colors.black87), tooltip: '上传附件', onPressed: () => _insertMarkdown('[点击下载附件](', ')')),
+              
+              // [深刻修复：真实的图片上传按钮接入]
+              IconButton(
+                icon: const Icon(Icons.image_outlined, color: Colors.black87), 
+                tooltip: '上传图片', 
+                onPressed: _isUploading ? null : _pickAndUploadImage,
+              ),
+              
               Container(width: 1, height: 24, color: Colors.grey.shade300, margin: const EdgeInsets.symmetric(horizontal: 8)),
               TextButton.icon(
                 icon: const Icon(Icons.lock_outline, size: 18, color: Colors.orange),
                 label: const Text('付费阅读', style: TextStyle(color: Colors.orange)),
-                onPressed: () => _insertMarkdown('[charge=10]\n在这里输入需要付费查阅的核心内容...\n', '[/charge]'),
+                onPressed: () => _insertMarkdown('[charge=10]\n隐藏的付费内容\n', '[/charge]'),
               ),
             ],
           ),
@@ -218,7 +245,6 @@ class _EditorPageState extends State<EditorPage> {
 
   Widget _buildHeader() {
     if (_isLoadingTags) return const Padding(padding: EdgeInsets.all(24), child: Center(child: CircularProgressIndicator()));
-    
     final primaryTags = _tags.where((t) => t.isPrimary).toList();
     final secondaryTags = _tags.where((t) => !t.isPrimary).toList();
 
@@ -230,7 +256,7 @@ class _EditorPageState extends State<EditorPage> {
           child: TextField(
             controller: _titleController,
             style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            decoration: InputDecoration(hintText: '请输入具有描述性的标题...', border: InputBorder.none, hintStyle: TextStyle(color: Colors.grey.shade400)),
+            decoration: InputDecoration(hintText: '请输入标题...', border: InputBorder.none, hintStyle: TextStyle(color: Colors.grey.shade400)),
           ),
         ),
         if (_tags.isNotEmpty)
@@ -240,7 +266,7 @@ class _EditorPageState extends State<EditorPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 if (primaryTags.isNotEmpty) ...[
-                  Text('主标签 (必要权限流)', style: TextStyle(fontSize: 12, color: Colors.grey.shade500, fontWeight: FontWeight.bold)),
+                  Text('主标签 (权限区)', style: TextStyle(fontSize: 12, color: Colors.grey.shade500, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 8),
                   Wrap(spacing: 8, runSpacing: 8, children: primaryTags.map((t) => _buildTagChip(t)).toList()),
                 ],
