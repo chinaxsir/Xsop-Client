@@ -3,7 +3,7 @@
 import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:file_picker/file_picker.dart'; // 务必确保 pubspec.yaml 中已添加 file_picker: ^6.0.0
+import 'package:file_picker/file_picker.dart'; 
 import 'package:xsop_forum/api/api_client.dart';
 import 'package:xsop_forum/models/flarum_models.dart';
 
@@ -11,8 +11,6 @@ class EditorPage extends StatefulWidget {
   final ApiClient api;
   final Discussion? discussion;
   final List<FlarumTag>? availableTags;
-  
-  // [图2/图3修复：接收传入的旧帖子数据，变身全功能编辑页]
   final Map<String, dynamic>? postToEdit; 
   final String? initialContent;
 
@@ -47,19 +45,20 @@ class _EditorPageState extends State<EditorPage> {
   @override
   void initState() {
     super.initState();
-    
-    // 如果是编辑模式，填入传进来的旧 Markdown 源码
     if (isEdit) {
       _contentController.text = widget.initialContent ?? '';
     }
-
     if (!isReply && !isEdit) {
       if (widget.availableTags != null && widget.availableTags!.isNotEmpty) {
-        _tags = widget.availableTags!;
+        _categorizeTags(widget.availableTags!);
       } else {
         _fetchTags();
       }
     }
+  }
+
+  void _categorizeTags(List<FlarumTag> tags) {
+    _tags = tags;
   }
 
   Future<void> _fetchTags() async {
@@ -68,12 +67,12 @@ class _EditorPageState extends State<EditorPage> {
       final res = await widget.api.getTags();
       if (mounted) {
         setState(() {
-          _tags = parseTags(res);
+          _categorizeTags(parseTags(res));
           _isLoadingTags = false;
         });
       }
     } catch (e) {
-      if (mounted) setState(() { _tagError = '无法获取板块标签，网络可能已断开。'; _isLoadingTags = false; });
+      if (mounted) setState(() { _tagError = '无法获取板块标签，请检查网络。'; _isLoadingTags = false; });
     }
   }
 
@@ -107,11 +106,11 @@ class _EditorPageState extends State<EditorPage> {
         Navigator.pop(context, true);
       }
     } on DioException catch (e) {
-      String errMsg = '提交失败：网络或权限异常';
+      String errMsg = '提交失败：操作被服务器拒绝';
       try {
         final errs = e.response?.data['errors'];
         if (errs != null && errs is List && errs.isNotEmpty && errs[0]['detail'] != null) {
-          errMsg = errs[0]['detail'];
+          errMsg = errs[0]['detail']; // 将真实的错误原因直接反馈在 UI 上
         }
       } catch (_) {}
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg)));
@@ -143,7 +142,6 @@ class _EditorPageState extends State<EditorPage> {
     _uploadLogic(pickedFile.path, pickedFile.name, true);
   }
 
-  // [发帖功能修复：接入真实的 file_picker 上传附件]
   Future<void> _pickAndUploadFile() async {
     try {
       final result = await FilePicker.platform.pickFiles();
@@ -153,13 +151,14 @@ class _EditorPageState extends State<EditorPage> {
         _uploadLogic(file.path!, file.name, false);
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('文件选择被取消或发生异常')));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('选择文件异常')));
     }
   }
 
+  // [深度暴露：将服务器的上传报错赤裸裸地呈现出来]
   Future<void> _uploadLogic(String path, String fileName, bool isImage) async {
     setState(() => _isUploading = true);
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('正在上传，请稍候...')));
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('正在执行上传...')));
     try {
       final uploadRes = await widget.api.uploadFile(path, filename: fileName);
       if (uploadRes != null && uploadRes['url'] != null) {
@@ -170,18 +169,24 @@ class _EditorPageState extends State<EditorPage> {
         } else {
           _insertMarkdown('[$baseName]($url)', '\n');
         }
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('上传成功！')));
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('文件上传成功！')));
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('上传失败，服务器返回数据异常。')));
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('接口异常：服务器返回了空数据。')));
       }
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('上传异常：超出大小限制或未配置相应插件')));
+    } on DioException catch (e) {
+      String errMsg = '接口拒绝上传。';
+      try {
+        final errs = e.response?.data['errors'];
+        if (errs != null && errs is List && errs.isNotEmpty && errs[0]['detail'] != null) {
+          errMsg = errs[0]['detail']; 
+        }
+      } catch (_) {}
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('上传阻断：$errMsg')));
     } finally {
       setState(() => _isUploading = false);
     }
   }
 
-  // [图1修复：精准提取并匹配您提供的完整提现申请模板]
   void _handleTagSelection(FlarumTag tag, bool isSelected) {
     setState(() {
       if (isSelected) {
@@ -192,12 +197,12 @@ class _EditorPageState extends State<EditorPage> {
 💸 提现申请核验单
 *请仔细核对以下信息，防刷单核对用。*
 
-- **提现金额 (XSD)：** [填写纯数字，最低100]
-- **收款方式：** [填写方式，如支付宝、微信]
-- **收款账号：** [填写完整账号]
-- **真实姓名：** [填写您的真实姓名]
+- **提现金额 (XSD): ** [填写纯数字，最低100]
+- **收款方式: ** [填写方式，如支付宝、微信]
+- **收款账号: ** [填写完整账号]
+- **真实姓名: ** [填写您的真实姓名]
 ''';
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已自动拉取 Cash 提现申请模板')));
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已自动拉取模板')));
            }
         }
       } else {
@@ -221,9 +226,7 @@ class _EditorPageState extends State<EditorPage> {
             padding: const EdgeInsets.only(right: 16, top: 8, bottom: 8),
             child: FilledButton(
               onPressed: (_isSubmitting || _isUploading) ? null : _submit,
-              child: _isSubmitting 
-                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                  : const Text('发送'),
+              child: _isSubmitting ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('发送'),
             ),
           )
         ],
@@ -268,16 +271,8 @@ class _EditorPageState extends State<EditorPage> {
               IconButton(icon: const Icon(Icons.format_italic, color: Colors.black87), tooltip: '斜体', onPressed: () => _insertMarkdown('*', '*')),
               IconButton(icon: const Icon(Icons.link, color: Colors.black87), tooltip: '插入链接', onPressed: () => _insertMarkdown('[', '](https://)')),
               Container(width: 1, height: 24, color: Colors.grey.shade300, margin: const EdgeInsets.symmetric(horizontal: 8)),
-              IconButton(
-                icon: const Icon(Icons.image_outlined, color: Colors.black87), 
-                tooltip: '上传图片', 
-                onPressed: _isUploading ? null : _pickAndUploadImage,
-              ),
-              IconButton(
-                icon: const Icon(Icons.attach_file, color: Colors.black87), 
-                tooltip: '上传附件', 
-                onPressed: _isUploading ? null : _pickAndUploadFile,
-              ),
+              IconButton(icon: const Icon(Icons.image_outlined, color: Colors.black87), tooltip: '上传图片', onPressed: _isUploading ? null : _pickAndUploadImage),
+              IconButton(icon: const Icon(Icons.attach_file, color: Colors.black87), tooltip: '上传附件', onPressed: _isUploading ? null : _pickAndUploadFile),
               Container(width: 1, height: 24, color: Colors.grey.shade300, margin: const EdgeInsets.symmetric(horizontal: 8)),
               TextButton.icon(
                 icon: const Icon(Icons.lock_outline, size: 18, color: Colors.orange),
