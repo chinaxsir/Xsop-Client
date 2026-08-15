@@ -45,7 +45,6 @@ class _NotificationsPageState extends State<NotificationsPage> with WidgetsBindi
 
   Future<void> _loadData({bool silent = false}) async {
     if (!silent) setState(() { _isLoading = true; _error = null; });
-    
     try {
       final res = await widget.api.getNotifications();
       if (mounted) {
@@ -57,35 +56,37 @@ class _NotificationsPageState extends State<NotificationsPage> with WidgetsBindi
         });
       }
     } catch (e) {
-      if (mounted && !silent) setState(() { _error = '数据同步进程发生异常，请核对网络链路状态。'; _isLoading = false; });
+      if (mounted && !silent) setState(() { _error = '数据同步异常，请下拉重试。'; _isLoading = false; });
     }
   }
 
-  Map<String, dynamic>? _getFromUser(Map<String, dynamic> notif) {
-    final fromUserId = notif['relationships']?['fromUser']?['data']?['id']?.toString();
-    if (fromUserId == null) return null;
+  Map<String, dynamic>? _getIncluded(String type, String? id) {
+    if (id == null) return null;
     try {
-      return _included.firstWhere((e) => e['type'] == 'users' && e['id'].toString() == fromUserId);
-    } catch (_) {
-      return null;
-    }
+      return _included.firstWhere((e) => e['type'] == type && e['id'].toString() == id);
+    } catch (_) { return null; }
   }
 
-  String _formatNotificationContent(String contentType, String? fromUserName) {
-    final name = fromUserName ?? '系统进程';
-    switch (contentType) {
-      case 'warning':
-        return '系统已下发来自 $name 的站务违规处理通报';
-      case 'postLiked':
-        return '$name 肯定并点赞了您的业务数据';
-      case 'postMentioned':
-        return '$name 在交互日志中引用了您的标识';
-      case 'newPost':
-        return '$name 对您的主题实体提交了新的数据追加';
-      case 'discussionRenamed':
-        return '$name 针对关联业务项的名称执行了修订指令';
-      default:
-        return '接收到新的系统事务状态变更日志 ($contentType)';
+  // [图4/图5 修复点：动态提取警告实体里的积分与详细原因]
+  String _formatNotificationContent(Map<String, dynamic> notif, String? fromUserName) {
+    final contentType = notif['attributes']?['contentType'] ?? '';
+    final name = fromUserName ?? '系统';
+    
+    if (contentType == 'warning') {
+       final subjectId = notif['relationships']?['subject']?['data']?['id']?.toString();
+       final warningObj = _getIncluded('warnings', subjectId);
+       final strikes = warningObj?['attributes']?['strikes'] ?? 0;
+       return '收到来自 $name 的警告并记 $strikes 分';
+    } else if (contentType == 'postLiked') {
+       return '$name 赞了您的帖子';
+    } else if (contentType == 'postMentioned') {
+       return '$name 提到了您';
+    } else if (contentType == 'newPost') {
+       return '$name 回复了您的主题';
+    } else if (contentType == 'discussionRenamed') {
+       return '$name 修改了主题标题';
+    } else {
+       return '收到一条新的 $contentType 事务通知';
     }
   }
 
@@ -96,7 +97,7 @@ class _NotificationsPageState extends State<NotificationsPage> with WidgetsBindi
       appBar: AppBar(
         backgroundColor: Colors.white,
         surfaceTintColor: Colors.transparent,
-        title: const Text('系统通知中心', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+        title: const Text('通知中心', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(0.5),
           child: Container(color: const Color(0xFFE5E5EA), height: 0.5),
@@ -120,14 +121,13 @@ class _NotificationsPageState extends State<NotificationsPage> with WidgetsBindi
             const SizedBox(height: 16),
             Text(_error!, style: TextStyle(color: Colors.grey.shade500, fontSize: 14)),
             const SizedBox(height: 16),
-            // [核心修复：加入 400 毫秒 UI 缓冲 tick，防止死连接秒拒导致的重试死循环]
             FilledButton.tonal(
               onPressed: () async {
                 setState(() { _isLoading = true; _error = null; });
                 await Future.delayed(const Duration(milliseconds: 400));
                 _loadData();
               }, 
-              child: const Text('重新发起通信请求')
+              child: const Text('重新连接')
             ),
           ],
         ),
@@ -145,7 +145,7 @@ class _NotificationsPageState extends State<NotificationsPage> with WidgetsBindi
                 children: [
                   Icon(Icons.notifications_none, size: 56, color: Colors.grey.shade300),
                   const SizedBox(height: 16),
-                  Text('当前系统业务栈内暂无新的通知下发。', style: TextStyle(color: Colors.grey.shade400, fontSize: 14)),
+                  Text('暂无新通知。', style: TextStyle(color: Colors.grey.shade400, fontSize: 14)),
                 ],
               ),
             ),
@@ -161,14 +161,13 @@ class _NotificationsPageState extends State<NotificationsPage> with WidgetsBindi
       itemBuilder: (context, index) {
         final notif = _notifications[index];
         final attrs = notif['attributes'] ?? {};
-        final contentType = attrs['contentType'] ?? '系统事务';
         final timeStr = attrs['createdAt'];
         
-        final fromUser = _getFromUser(notif);
+        final fromUser = _getIncluded('users', notif['relationships']?['fromUser']?['data']?['id']?.toString());
         final fromUserName = fromUser?['attributes']?['displayName'] ?? fromUser?['attributes']?['username'];
         final fromUserAvatar = fromUser?['attributes']?['avatarUrl'];
         
-        final displayTitle = _formatNotificationContent(contentType, fromUserName);
+        final displayTitle = _formatNotificationContent(notif, fromUserName);
         
         return ListTile(
           contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
