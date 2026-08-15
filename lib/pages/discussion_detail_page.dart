@@ -69,79 +69,37 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
     }
   }
 
-  // [深刻修复：向服务器索要带有 Markdown 源文本的 content 字段并回填]
-  Future<void> _showEditDialog(int postId, int index) async {
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('正在获取原帖内容...')));
+  // [深刻修复：抛弃原生简单弹窗，先去服务端拿取最纯净的 Markdown 原文，再喂给全功能编辑器！]
+  Future<void> _openEditorForEdit(int index) async {
+    final post = _posts[index];
+    final postId = post['id'];
     
-    String initialContent = '';
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('正在提取原文...')));
+    String rawContent = post['attributes']?['content']?.toString() ?? '';
+    
     try {
-       // 单独请求该回帖，获取最纯净的 content 数据用于编辑
        final res = await widget.api.getDynamicList('/api/posts/$postId');
-       initialContent = res['data']?['attributes']?['content']?.toString() ?? '';
-    } catch (e) {
-       // 降级使用本地缓存（通常为 HTML 或空）
-       initialContent = _posts[index]['attributes']?['content']?.toString() ?? '';
-    }
-
-    final editController = TextEditingController(text: initialContent);
+       rawContent = res['data']?['attributes']?['content']?.toString() ?? rawContent;
+    } catch (_) {}
 
     if (!mounted) return;
-    await showDialog(
-      context: context,
-      builder: (context) {
-        bool isSubmitting = false;
-        return StatefulBuilder(
-          builder: (context, setStateDialog) {
-            return AlertDialog(
-              backgroundColor: Colors.white,
-              surfaceTintColor: Colors.transparent,
-              title: const Text('编辑回复', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-              content: SingleChildScrollView(
-                child: TextField(
-                  controller: editController,
-                  maxLines: null,
-                  minLines: 4,
-                  decoration: const InputDecoration(
-                    hintText: '修改内容（支持 Markdown）',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-              ),
-              actions: [
-                TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消', style: TextStyle(color: Colors.grey))),
-                FilledButton(
-                  onPressed: isSubmitting ? null : () async {
-                    if (editController.text.trim().isEmpty) return;
-                    setStateDialog(() => isSubmitting = true);
-                    try {
-                      await widget.api.editPost(postId, editController.text.trim());
-                      if (mounted) {
-                        Navigator.pop(context);
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('编辑成功')));
-                        setState(() => _isLoading = true);
-                        _loadDiscussionDetail(); 
-                      }
-                    } on DioException catch (e) {
-                       String errMsg = '编辑失败';
-                       try {
-                         final errs = e.response?.data['errors'];
-                         if (errs != null && errs is List && errs.isNotEmpty && errs[0]['detail'] != null) {
-                           errMsg = errs[0]['detail'];
-                         }
-                       } catch (_) {}
-                       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg)));
-                    } finally {
-                      if (mounted) setStateDialog(() => isSubmitting = false);
-                    }
-                  },
-                  child: isSubmitting ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('保存修改'),
-                ),
-              ],
-            );
-          }
-        );
-      }
+    
+    // 打开刚才写好的那个功能齐全的 EditorPage
+    final result = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => EditorPage(
+          api: widget.api,
+          postToEdit: post, 
+          initialContent: rawContent,
+        ),
+      ),
     );
+    
+    if (result == true) {
+      setState(() => _isLoading = true);
+      _loadDiscussionDetail();
+    }
   }
 
   Future<void> _showTipDialog(int postId) async {
@@ -160,7 +118,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
               content: TextField(
                 controller: amountController,
                 keyboardType: TextInputType.number,
-                decoration: const InputDecoration(hintText: '请输入打赏金额', border: OutlineInputBorder(), suffixText: 'XSD'),
+                decoration: const InputDecoration(hintText: '请输入打赏金额 (整数)', border: OutlineInputBorder(), suffixText: 'XSD'),
               ),
               actions: [
                 TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消', style: TextStyle(color: Colors.grey))),
@@ -177,11 +135,11 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                       await widget.api.tipPost(postId, amount);
                       if (mounted) {
                         Navigator.pop(context);
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('打赏成功，感谢支持！')));
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('打赏成功！')));
                       }
                     } on DioException catch (e) {
                       if (mounted) {
-                         String errMsg = '打赏异常，余额不足或未开通接口';
+                         String errMsg = '打赏失败：可能余额不足或未开启对应权限接口';
                          try {
                            final errs = e.response?.data['errors'];
                            if (errs != null && errs is List && errs.isNotEmpty && errs[0]['detail'] != null) {
@@ -441,7 +399,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
         final isLiked = attrs['isLiked'] ?? false;
         final likesCount = attrs['likesCount'] ?? 0;
 
-        // [深刻修复：严格通过原生属性判定用户的帖子操控权限]
+        // [深度修复：绝不越权！依靠服务器底层下发的真实权限属性来控制菜单项显示]
         final bool canEdit = attrs['canEdit'] == true;
         final bool canDelete = attrs['canDelete'] == true;
 
@@ -516,7 +474,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                         _promptLogin();
                         return;
                       }
-                      if (value == 'edit') _showEditDialog(postId, index);
+                      if (value == 'edit') _openEditorForEdit(index);
                       else if (value == 'delete') _deletePost(postId, index);
                       else if (value == 'tip') _showTipDialog(postId);
                       else if (value == 'warn') _showWarnDialog(postId, userIdStr);
@@ -526,7 +484,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                       const PopupMenuItem<String>(value: 'tip', child: Row(children: [Icon(Icons.card_giftcard, size: 18, color: Colors.orange), SizedBox(width: 8), Text('打赏')])),
                       const PopupMenuItem<String>(value: 'vote', child: Row(children: [Icon(Icons.how_to_vote_outlined, size: 18, color: Colors.blueAccent), SizedBox(width: 8), Text('互动详情')])),
                       
-                      // 严格受服务器权限管控的按钮
+                      // 严格依靠服务器 `canEdit` 显隐
                       if (canEdit) const PopupMenuItem<String>(value: 'edit', child: Row(children: [Icon(Icons.edit_outlined, size: 18), SizedBox(width: 8), Text('编辑本帖')])),
                       const PopupMenuItem<String>(value: 'warn', child: Row(children: [Icon(Icons.info_outline, size: 18, color: Colors.redAccent), SizedBox(width: 8), Text('下发警告')])),
                       if (canDelete) const PopupMenuDivider(),
