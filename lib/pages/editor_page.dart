@@ -84,9 +84,18 @@ class _EditorPageState extends State<EditorPage> {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('正文不能为空')));
       return;
     }
-    if (!isReply && !isEdit && title.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('标题不能为空')));
-      return;
+    
+    // [强校验] 针对发新帖的拦截
+    if (!isReply && !isEdit) {
+      if (title.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('标题不能为空')));
+        return;
+      }
+      final primaryTags = _tags.where((t) => t.isPrimary).toList();
+      if (primaryTags.isNotEmpty && _selectedTags.where((t) => t.isPrimary).isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('必须选择 1 个主标签')));
+        return;
+      }
     }
 
     setState(() => _isSubmitting = true);
@@ -186,11 +195,25 @@ class _EditorPageState extends State<EditorPage> {
     }
   }
 
+  // [极度严谨的标签权限与排版控制器]
   void _handleTagSelection(FlarumTag tag, bool isSelected) {
     setState(() {
       if (isSelected) {
-        _selectedTags.add(tag);
-        // [严格修复：完全按照官方格式进行 Cash 模版的排版呈现]
+        if (tag.isPrimary) {
+          // 逻辑 1：主标签【单选互斥】。一旦选中新的，自动排遣之前的主标签。
+          _selectedTags.removeWhere((t) => t.isPrimary);
+          _selectedTags.add(tag);
+        } else {
+          // 逻辑 2：次级标签【容量拦截】。拦截超过 2 个次级标签的选择。
+          final secondaryCount = _selectedTags.where((t) => !t.isPrimary).length;
+          if (secondaryCount >= 2) {
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('最多只能选择 2 个次级标签')));
+            return; // 阻止后续操作
+          }
+          _selectedTags.add(tag);
+        }
+
+        // 逻辑 3：特定标签（Cash）激活专用模板
         if (tag.slug.toLowerCase().contains('cash') || tag.name.contains('Cash') || tag.name.contains('收费')) {
            if (!_contentController.text.contains('提现申请核验单')) {
               _contentController.text += '\n💸 提现申请核验单\n*请仔细核对以下信息，防刷单核对用。*\n\n- **提现金额 (XSD): ** [填写纯数字，最低100]\n- **收款方式: ** [填写方式，如支付宝、微信]\n- **收款账号: ** [填写完整账号]\n- **真实姓名: ** [填写您的真实姓名]\n';
@@ -198,6 +221,7 @@ class _EditorPageState extends State<EditorPage> {
            }
         }
       } else {
+        // 允许取消选中
         _selectedTags.remove(tag);
       }
     });
@@ -269,7 +293,6 @@ class _EditorPageState extends State<EditorPage> {
               TextButton.icon(
                 icon: const Icon(Icons.lock_outline, size: 18, color: Colors.orange),
                 label: const Text('付费阅读', style: TextStyle(color: Colors.orange)),
-                // [核心修复：还原 Flarum 真实的付费查询语法！]
                 onPressed: () => _insertMarkdown('[pay amount=1 id=0]id为空或0将创建新的付费阅读，不修改原有的id则已经付费的用户可继续阅读', '[\/pay]'),
               ),
             ],
@@ -302,13 +325,14 @@ class _EditorPageState extends State<EditorPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 if (primaryTags.isNotEmpty) ...[
-                  Text('主标签 (权限区)', style: TextStyle(fontSize: 12, color: Colors.grey.shade500, fontWeight: FontWeight.bold)),
+                  // 更新了引导性文案，让用户明确单选的规则
+                  Text('主标签 (必须且只能选 1 个)', style: TextStyle(fontSize: 12, color: Colors.grey.shade500, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 8),
                   Wrap(spacing: 8, runSpacing: 8, children: primaryTags.map((t) => _buildTagChip(t)).toList()),
                 ],
                 if (secondaryTags.isNotEmpty) ...[
                   const SizedBox(height: 16),
-                  Text('次级标签', style: TextStyle(fontSize: 12, color: Colors.grey.shade500, fontWeight: FontWeight.bold)),
+                  Text('次级标签 (最多选 2 个)', style: TextStyle(fontSize: 12, color: Colors.grey.shade500, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 8),
                   Wrap(spacing: 8, runSpacing: 8, children: secondaryTags.map((t) => _buildTagChip(t)).toList()),
                 ],
