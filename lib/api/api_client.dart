@@ -66,7 +66,6 @@ class ApiClient {
   Future<Map<String, dynamic>> getDiscussions({int page = 1, int pageSize = 20, String? tag, String? author, String? sort}) async {
     final query = <String, dynamic>{'page[number]': page, 'page[size]': pageSize};
     if (tag != null && tag.isNotEmpty) query['filter[tag]'] = tag.trim();
-    
     List<String> searchQueries = [];
     if (author != null && author.isNotEmpty) searchQueries.add('author:${author.trim()}');
     if (searchQueries.isNotEmpty) query['filter[q]'] = searchQueries.join(' ');
@@ -126,7 +125,6 @@ class ApiClient {
     await _dio.post('/api/warnings', data: data);
   }
 
-  // [兼容修复：暴力的打赏探针，挨个测试 Flarum 插件最常用的打赏/转账 API 格式]
   Future<void> tipPost(int postId, int amount) async {
     DioException? lastErr;
     final payloads = [
@@ -134,7 +132,7 @@ class ApiClient {
       {"data": {"attributes": {"amount": amount}}},
       {"amount": amount}
     ];
-    final endpoints = ['/api/tips', '/api/posts/$postId/tip', '/api/money-transfers'];
+    final endpoints = ['/api/tips', '/api/posts/$postId/tip', '/api/posts/$postId/reward', '/api/money-transfers'];
 
     for (final ep in endpoints) {
       for (final p in payloads) {
@@ -164,9 +162,13 @@ class ApiClient {
     return _asMap(response.data);
   }
 
+  // [图1修复：彻底解锁 fof/upload 附件上传，严格按照 PHP 数组规范构造 FormData]
   Future<Map<String, String>?> uploadFile(String filePath, {String? filename}) async {
     String name = filename ?? filePath.split('/').last;
-    final formData = FormData.fromMap({'files[]': await MultipartFile.fromFile(filePath, filename: name)});
+    final formData = FormData();
+    // 使用 MapEntry 追加到 files 数组，防止 Dart 破坏 files[] 的结构
+    formData.files.add(MapEntry('files[]', await MultipartFile.fromFile(filePath, filename: name)));
+    
     final response = await _dio.post('/api/fof/upload', data: formData);
     final data = _asMap(response.data);
     final files = data['data'] as List<dynamic>?;
