@@ -198,10 +198,12 @@ class _UserProfilePageState extends State<UserProfilePage> {
                     ),
                     const SizedBox(height: 24),
 
+                    // [深刻修复：新增资金明细专属入口]
                     _buildSectionGroup(
                       title: '个人记录',
                       items: [
                         _MenuItem(icon: Icons.card_giftcard, color: Colors.orange, title: '打赏记录', onTap: () => _navigateToActivity('打赏记录', 'tips')),
+                        _MenuItem(icon: Icons.account_balance_wallet, color: Colors.green, title: '资金明细', onTap: () => _navigateToActivity('资金明细', 'money')),
                         _MenuItem(icon: Icons.warning_amber_rounded, color: Colors.red, title: '站务警告', onTap: () => _navigateToActivity('站务警告', 'warnings')),
                       ],
                     ),
