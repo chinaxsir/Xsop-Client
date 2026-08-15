@@ -125,20 +125,22 @@ class ApiClient {
     await _dio.post('/api/warnings', data: data);
   }
 
+  // [无敌探测引擎：组合所有的 Endpoint 和 Payload 格式进行地毯式重试]
   Future<void> tipPost(int postId, int amount) async {
     DioException? lastErr;
     final payloads = [
       {"data": {"type": "tips", "attributes": {"amount": amount}, "relationships": {"post": {"data": {"type": "posts", "id": postId.toString()}}}}},
+      {"data": {"type": "post_tips", "attributes": {"amount": amount}, "relationships": {"post": {"data": {"type": "posts", "id": postId.toString()}}}}},
       {"data": {"attributes": {"amount": amount}}},
       {"amount": amount}
     ];
-    final endpoints = ['/api/tips', '/api/posts/$postId/tip', '/api/posts/$postId/reward', '/api/money-transfers'];
+    final endpoints = ['/api/posts/$postId/tip', '/api/posts/$postId/reward', '/api/tips'];
 
     for (final ep in endpoints) {
       for (final p in payloads) {
         try {
           await _dio.post(ep, data: p);
-          return;
+          return; // 只要有一种组合成功，立刻返回
         } on DioException catch (e) {
           lastErr = e;
         }
@@ -162,11 +164,9 @@ class ApiClient {
     return _asMap(response.data);
   }
 
-  // [图1修复：彻底解锁 fof/upload 附件上传，严格按照 PHP 数组规范构造 FormData]
   Future<Map<String, String>?> uploadFile(String filePath, {String? filename}) async {
     String name = filename ?? filePath.split('/').last;
     final formData = FormData();
-    // 使用 MapEntry 追加到 files 数组，防止 Dart 破坏 files[] 的结构
     formData.files.add(MapEntry('files[]', await MultipartFile.fromFile(filePath, filename: name)));
     
     final response = await _dio.post('/api/fof/upload', data: formData);
