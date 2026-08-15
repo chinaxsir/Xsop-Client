@@ -81,7 +81,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
       });
     } catch (e) {
       setState(() {
-        _error = '网络不佳，获取帖子详情失败';
+        _error = '网络传输发生故障，获取主题系统详情阻断';
         _isLoading = false;
       });
     }
@@ -91,7 +91,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
     final post = _posts[index];
     final postId = post['id'];
     
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('提取Markdown源码中...')));
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('提取Markdown源码环境数据中...')));
     String rawContent = post['attributes']?['content']?.toString() ?? '';
     
     try {
@@ -130,11 +130,11 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
             return AlertDialog(
               backgroundColor: Colors.white,
               surfaceTintColor: Colors.transparent,
-              title: const Row(children: [Icon(Icons.card_giftcard, color: Colors.orange), SizedBox(width: 8), Text('打赏作者')]),
+              title: const Row(children: [Icon(Icons.card_giftcard, color: Colors.orange), SizedBox(width: 8), Text('资源打赏系统')]),
               content: TextField(
                 controller: amountController,
                 keyboardType: TextInputType.number,
-                decoration: const InputDecoration(hintText: '输入打赏金额 (整数)', border: OutlineInputBorder(), suffixText: 'XSD'),
+                decoration: const InputDecoration(hintText: '输入交互流转数值 (XSD)', border: OutlineInputBorder(), suffixText: 'XSD'),
               ),
               actions: [
                 TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消', style: TextStyle(color: Colors.grey))),
@@ -143,7 +143,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                   onPressed: isSubmitting ? null : () async {
                     final amount = int.tryParse(amountController.text.trim());
                     if (amount == null || amount <= 0) {
-                       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('金额不合法')));
+                       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('交互数值非法阻断')));
                        return;
                     }
                     setStateDialog(() => isSubmitting = true);
@@ -151,30 +151,34 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                       await widget.api.tipPost(postId, amount);
                       if (mounted) {
                         Navigator.pop(context);
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('打赏成功！')));
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('资产流水结算成功！')));
                       }
                     } on DioException catch (e) {
                       if (mounted) {
-                         // [极度坦诚：向您展示服务端真实的拦截原因，不再做无用的猜测掩盖]
-                         String errMsg = '接口拒绝打赏';
+                         String errMsg = '打赏阻断：服务端底层鉴权拒绝，或余额核验失败';
                          try {
                            final rawData = e.response?.data;
                            if (rawData != null && rawData is Map) {
                              if (rawData['errors'] != null && rawData['errors'] is List && rawData['errors'].isNotEmpty) {
                                errMsg = rawData['errors'][0]['detail'] ?? errMsg;
-                             } else {
-                               errMsg = '服务端报回异常格式: ${rawData.toString()}';
+                             } else if (rawData['message'] != null) {
+                               errMsg = rawData['message'];
                              }
                            }
                          } catch (_) {}
                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg), duration: const Duration(seconds: 4)));
                          Navigator.pop(context); 
                       }
+                    } catch (e) {
+                      if (mounted) {
+                         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('内部引擎防崩溃：${e.toString()}'), duration: const Duration(seconds: 4)));
+                         Navigator.pop(context); 
+                      }
                     } finally {
                       if (mounted) setStateDialog(() => isSubmitting = false);
                     }
                   },
-                  child: isSubmitting ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('确认打赏'),
+                  child: isSubmitting ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('执行结算'),
                 ),
               ],
             );
@@ -195,13 +199,13 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
          return AlertDialog(
            backgroundColor: Colors.white,
            surfaceTintColor: Colors.transparent,
-           title: const Text('互动详情'),
+           title: const Text('数据流统计参数'),
            content: Column(
              mainAxisSize: MainAxisSize.min,
              children: [
                ListTile(
                  leading: const Icon(Icons.thumb_up, color: Colors.green),
-                 title: const Text('支持 / 获赞数'),
+                 title: const Text('互动 / 核验通过基数'),
                  trailing: Text('$upvotes', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Colors.green)),
                ),
              ]
@@ -228,24 +232,24 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
             return AlertDialog(
               backgroundColor: Colors.white,
               surfaceTintColor: Colors.transparent,
-              title: const Row(children: [Icon(Icons.warning_amber, color: Colors.redAccent), SizedBox(width: 8), Text('下发违规警告')]),
+              title: const Row(children: [Icon(Icons.warning_amber, color: Colors.redAccent), SizedBox(width: 8), Text('下发站务警告数据')]),
               content: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('严重程度：记几分？', style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.bold)),
+                    const Text('核验等级：计入参数', style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 6),
                     TextField(controller: strikesCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(border: OutlineInputBorder(), isDense: true)),
                     const SizedBox(height: 16),
-                    const Text('用户批注。为什么警告？（对用户可见）', style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.bold)),
+                    const Text('前端下发通报内容', style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 6),
                     TextField(controller: publicCtrl, maxLines: 3, decoration: const InputDecoration(border: OutlineInputBorder())),
                   ],
                 ),
               ),
               actions: [
-                TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消', style: TextStyle(color: Colors.grey))),
+                TextButton(onPressed: () => Navigator.pop(context), child: const Text('系统撤销', style: TextStyle(color: Colors.grey))),
                 FilledButton(
                   style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
                   onPressed: isSubmitting ? null : () async {
@@ -260,10 +264,10 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                       );
                       if (mounted) {
                         Navigator.pop(context);
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('警告下发成功！')));
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('系统警告下发部署完毕！')));
                       }
                     } on DioException catch (e) {
-                       String errMsg = '越权或配置错误，警告下发失败';
+                       String errMsg = '越权环境阻断，警告下发失败';
                        try {
                          final errs = e.response?.data['errors'];
                          if (errs != null && errs is List && errs.isNotEmpty && errs[0]['detail'] != null) {
@@ -275,7 +279,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                       if (mounted) setStateDialog(() => isSubmitting = false);
                     }
                   },
-                  child: isSubmitting ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('确认警告'),
+                  child: isSubmitting ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('确认下发'),
                 ),
               ],
             );
@@ -311,7 +315,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
           _posts[index]['attributes']['likesCount'] = currentLikesCount;
         });
         
-        String errMsg = '点赞行为被阻断';
+        String errMsg = '操作越权系统拦截';
         try {
           final errs = e.response?.data['errors'];
           if (errs != null && errs is List && errs.isNotEmpty && errs[0]['detail'] != null) {
@@ -328,10 +332,10 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
       await widget.api.deletePost(postId);
       if (mounted) {
         setState(() { _posts.removeAt(index); });
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('删除成功')));
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('系统底层数据已清除')));
       }
     } on DioException catch (e) {
-      String errMsg = '服务器驳回了删除请求';
+      String errMsg = '服务器驳回了删除请求系统拦截';
       try {
         final errs = e.response?.data['errors'];
         if (errs != null && errs is List && errs.isNotEmpty && errs[0]['detail'] != null) {
@@ -370,6 +374,68 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
       _loadDiscussionDetail();
     }
   }
+  
+  // [图2 核心修复：1:1 像素级复刻网页版的红色虚线购买组件！]
+  Widget _buildPayBlock(Map<String, dynamic> attrs) {
+    // 获取价格和购买人数，处理多语言或不同插件的兼容性
+    final payAmount = attrs['payAmount']?.toString() ?? '1';
+    final buyersCount = attrs['paidUsersCount']?.toString() ?? attrs['buyersCount']?.toString() ?? '0';
+    
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFCF8F8), // 接近网页端的极浅红底色
+        borderRadius: BorderRadius.circular(2),
+      ),
+      child: Stack(
+        children: [
+          Positioned.fill(
+             child: CustomPaint(painter: _DashedBorderPainter(color: const Color(0xFFE88A8E))), // 官方同款红虚线
+          ),
+          Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Center(
+                  child: Text('本帖的付费阅读内容', style: TextStyle(color: const Color(0xFFE85055), fontWeight: FontWeight.bold, fontSize: 14)),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Expanded(
+                      child: Text('作者将该内容设置为付费可见。 价格 $payAmount XSD', style: const TextStyle(fontSize: 14, color: Colors.black87)),
+                    ),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                         Text('$buyersCount人付费', style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
+                         const SizedBox(height: 8),
+                         FilledButton(
+                           style: FilledButton.styleFrom(
+                             backgroundColor: const Color(0xFF526D85), // 官方同款深蓝灰按钮
+                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 0),
+                             minimumSize: const Size(80, 36),
+                           ),
+                           onPressed: () {
+                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('系统提示：该板块支付接口仅限 Web 端核验，请前往网页版进行权限结算购买。')));
+                           },
+                           child: const Text('购买', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                         )
+                      ],
+                    )
+                  ],
+                )
+              ],
+            ),
+          )
+        ],
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -402,7 +468,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                 children: [
                   Icon(Icons.edit, size: 18, color: Colors.grey.shade500),
                   const SizedBox(width: 8),
-                  Text('写下你的回复...', style: TextStyle(color: Colors.grey.shade500, fontSize: 14)),
+                  Text('前端交互回复系统...', style: TextStyle(color: Colors.grey.shade500, fontSize: 14)),
                 ],
               ),
             ),
@@ -434,11 +500,20 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
         final time = timeStr != null ? DateTime.tryParse(timeStr) : null;
         
         final htmlContent = attrs['contentHtml'] as String? ?? '';
+        final rawContent = attrs['content'] as String? ?? '';
         final isLiked = attrs['isLiked'] ?? false;
         final likesCount = attrs['likesCount'] ?? 0;
 
         final bool canEdit = attrs['canEdit'] == true;
         final bool canDelete = attrs['canDelete'] == true;
+        
+        // [极度智能探测：哪怕 Flarum 没有下发 payAmount，只要 rawContent 包含收费标志，就认为是收费帖！防止图1白板]
+        final isPayProtected = htmlContent.isEmpty && (
+           rawContent.contains('[pay') || 
+           rawContent.contains('付费可见') ||
+           attrs['isPay'] == true || 
+           attrs['payAmount'] != null
+        );
 
         return Container(
           color: Colors.white,
@@ -474,7 +549,12 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                 ],
               ),
               const SizedBox(height: 12),
-              HtmlWidget(htmlContent, textStyle: const TextStyle(fontSize: 16, height: 1.6, color: Colors.black87)),
+              
+              if (isPayProtected) 
+                 _buildPayBlock(attrs)
+              else 
+                 HtmlWidget(htmlContent, textStyle: const TextStyle(fontSize: 16, height: 1.6, color: Colors.black87)),
+                 
               const SizedBox(height: 12),
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,
@@ -496,7 +576,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                   InkWell(
                     onTap: _openReplyEditor,
                     borderRadius: BorderRadius.circular(16),
-                    child: Padding(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6), child: Text('回复', style: TextStyle(color: Colors.grey.shade700, fontSize: 13, fontWeight: FontWeight.w500))),
+                    child: Padding(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6), child: Text('系统交互', style: TextStyle(color: Colors.grey.shade700, fontSize: 13, fontWeight: FontWeight.w500))),
                   ),
                   const SizedBox(width: 8),
                   
@@ -518,13 +598,13 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                       else if (value == 'vote') _showVoteDetails(index);
                     },
                     itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
-                      const PopupMenuItem<String>(value: 'tip', child: Row(children: [Icon(Icons.card_giftcard, size: 18, color: Colors.orange), SizedBox(width: 8), Text('打赏')])),
-                      const PopupMenuItem<String>(value: 'vote', child: Row(children: [Icon(Icons.how_to_vote_outlined, size: 18, color: Colors.blueAccent), SizedBox(width: 8), Text('互动详情')])),
+                      const PopupMenuItem<String>(value: 'tip', child: Row(children: [Icon(Icons.card_giftcard, size: 18, color: Colors.orange), SizedBox(width: 8), Text('资产打赏')])),
+                      const PopupMenuItem<String>(value: 'vote', child: Row(children: [Icon(Icons.how_to_vote_outlined, size: 18, color: Colors.blueAccent), SizedBox(width: 8), Text('核验详情')])),
                       
-                      if (canEdit) const PopupMenuItem<String>(value: 'edit', child: Row(children: [Icon(Icons.edit_outlined, size: 18), SizedBox(width: 8), Text('编辑本帖')])),
-                      if (_canWarnUser) const PopupMenuItem<String>(value: 'warn', child: Row(children: [Icon(Icons.info_outline, size: 18, color: Colors.redAccent), SizedBox(width: 8), Text('下发警告')])),
+                      if (canEdit) const PopupMenuItem<String>(value: 'edit', child: Row(children: [Icon(Icons.edit_outlined, size: 18), SizedBox(width: 8), Text('系统编辑')])),
+                      if (_canWarnUser) const PopupMenuItem<String>(value: 'warn', child: Row(children: [Icon(Icons.info_outline, size: 18, color: Colors.redAccent), SizedBox(width: 8), Text('通报警告')])),
                       if (canDelete) const PopupMenuDivider(),
-                      if (canDelete) const PopupMenuItem<String>(value: 'delete', child: Row(children: [Icon(Icons.delete_outline, size: 18, color: Colors.red), SizedBox(width: 8), Text('删除', style: TextStyle(color: Colors.red))])),
+                      if (canDelete) const PopupMenuItem<String>(value: 'delete', child: Row(children: [Icon(Icons.delete_outline, size: 18, color: Colors.red), SizedBox(width: 8), Text('安全抹除', style: TextStyle(color: Colors.red))])),
                     ],
                   ),
                 ],
@@ -535,4 +615,50 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
       },
     );
   }
+}
+
+class _DashedBorderPainter extends CustomPainter {
+  final Color color;
+  _DashedBorderPainter({required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    var paint = Paint()
+      ..color = color
+      ..strokeWidth = 1.5
+      ..style = PaintingStyle.stroke;
+
+    var path = Path();
+    double dashWidth = 5.0, dashSpace = 4.0;
+    
+    double startX = 0;
+    while (startX < size.width) {
+      path.moveTo(startX, 0);
+      path.lineTo(startX + dashWidth, 0);
+      startX += dashWidth + dashSpace;
+    }
+    startX = 0;
+    while (startX < size.width) {
+      path.moveTo(startX, size.height);
+      path.lineTo(startX + dashWidth, size.height);
+      startX += dashWidth + dashSpace;
+    }
+    double startY = 0;
+    while (startY < size.height) {
+      path.moveTo(0, startY);
+      path.lineTo(0, startY + dashWidth);
+      startY += dashWidth + dashSpace;
+    }
+    startY = 0;
+    while (startY < size.height) {
+      path.moveTo(size.width, startY);
+      path.lineTo(size.width, startY + dashWidth);
+      startY += dashWidth + dashSpace;
+    }
+
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(CustomPainter oldDelegate) => false;
 }
