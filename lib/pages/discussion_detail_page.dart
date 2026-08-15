@@ -69,12 +69,23 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
     }
   }
 
-  // [修复图2：精准提取 Flarum 原生 content Markdown 作为编辑框初始值]
+  // [深刻修复：向服务器索要带有 Markdown 源文本的 content 字段并回填]
   Future<void> _showEditDialog(int postId, int index) async {
-    final post = _posts[index];
-    final initialContent = post['attributes']?['content']?.toString() ?? '';
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('正在获取原帖内容...')));
+    
+    String initialContent = '';
+    try {
+       // 单独请求该回帖，获取最纯净的 content 数据用于编辑
+       final res = await widget.api.getDynamicList('/api/posts/$postId');
+       initialContent = res['data']?['attributes']?['content']?.toString() ?? '';
+    } catch (e) {
+       // 降级使用本地缓存（通常为 HTML 或空）
+       initialContent = _posts[index]['attributes']?['content']?.toString() ?? '';
+    }
+
     final editController = TextEditingController(text: initialContent);
 
+    if (!mounted) return;
     await showDialog(
       context: context,
       builder: (context) {
@@ -133,7 +144,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
     );
   }
 
-  // [修复图1：调用原生打赏接口，直通服务端报错日志]
   Future<void> _showTipDialog(int postId) async {
     final amountController = TextEditingController();
 
@@ -171,7 +181,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                       }
                     } on DioException catch (e) {
                       if (mounted) {
-                         String errMsg = '打赏异常，余额可能不足或未开通接口';
+                         String errMsg = '打赏异常，余额不足或未开通接口';
                          try {
                            final errs = e.response?.data['errors'];
                            if (errs != null && errs is List && errs.isNotEmpty && errs[0]['detail'] != null) {
@@ -213,8 +223,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                  title: const Text('支持 / 获赞数'),
                  trailing: Text('$upvotes', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Colors.green)),
                ),
-               const SizedBox(height: 16),
-               const Text('具体参与用户列表需前往网页端查看。', style: TextStyle(color: Colors.grey, fontSize: 12)),
              ]
            ),
            actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('关闭'))]
@@ -252,10 +260,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                     const Text('用户批注。为什么警告？（对用户可见）', style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 6),
                     TextField(controller: publicCtrl, maxLines: 3, decoration: const InputDecoration(border: OutlineInputBorder())),
-                    const SizedBox(height: 16),
-                    const Text('管理员备注。（仅对管理员可见）', style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 6),
-                    TextField(controller: privateCtrl, maxLines: 3, decoration: const InputDecoration(border: OutlineInputBorder())),
                   ],
                 ),
               ),
@@ -338,55 +342,8 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('删除成功')));
       }
     } on DioException catch (_) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('删除失败：权限不足')));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('删除失败：您无权执行此操作')));
     }
-  }
-
-  Future<void> _showReportDialog(int postId) async {
-    String selectedReason = 'spam';
-    final detailController = TextEditingController();
-
-    await showDialog(
-      context: context,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setStateDialog) {
-            return AlertDialog(
-              backgroundColor: Colors.white,
-              surfaceTintColor: Colors.transparent,
-              title: const Text('举报该内容'),
-              content: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    RadioListTile(title: const Text('垃圾广告'), value: 'spam', groupValue: selectedReason, onChanged: (val) => setStateDialog(() => selectedReason = val.toString())),
-                    RadioListTile(title: const Text('违规内容'), value: 'inappropriate', groupValue: selectedReason, onChanged: (val) => setStateDialog(() => selectedReason = val.toString())),
-                    RadioListTile(title: const Text('偏离主题'), value: 'off_topic', groupValue: selectedReason, onChanged: (val) => setStateDialog(() => selectedReason = val.toString())),
-                    const SizedBox(height: 8),
-                    TextField(controller: detailController, decoration: const InputDecoration(hintText: '补充详细原因（选填）', border: OutlineInputBorder()), maxLines: 2),
-                  ],
-                ),
-              ),
-              actions: [
-                TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')),
-                FilledButton(
-                  onPressed: () async {
-                    Navigator.pop(context);
-                    try {
-                      await widget.api.reportPost(postId, selectedReason, detailController.text);
-                      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('举报已提交，感谢您的反馈')));
-                    } catch (_) {
-                      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('权限不足：无法举报')));
-                    }
-                  },
-                  child: const Text('提交'),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
   }
 
   void _openReplyEditor() async {
@@ -484,6 +441,10 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
         final isLiked = attrs['isLiked'] ?? false;
         final likesCount = attrs['likesCount'] ?? 0;
 
+        // [深刻修复：严格通过原生属性判定用户的帖子操控权限]
+        final bool canEdit = attrs['canEdit'] == true;
+        final bool canDelete = attrs['canDelete'] == true;
+
         return Container(
           color: Colors.white,
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
@@ -543,6 +504,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                     child: Padding(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6), child: Text('回复', style: TextStyle(color: Colors.grey.shade700, fontSize: 13, fontWeight: FontWeight.w500))),
                   ),
                   const SizedBox(width: 8),
+                  
                   PopupMenuButton<String>(
                     icon: Icon(Icons.more_horiz, color: Colors.grey.shade500),
                     color: Colors.white,
@@ -554,21 +516,21 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                         _promptLogin();
                         return;
                       }
-                      if (value == 'report') _showReportDialog(postId);
+                      if (value == 'edit') _showEditDialog(postId, index);
                       else if (value == 'delete') _deletePost(postId, index);
-                      else if (value == 'edit') _showEditDialog(postId, index);
                       else if (value == 'tip') _showTipDialog(postId);
-                      else if (value == 'vote') _showVoteDetails(index);
                       else if (value == 'warn') _showWarnDialog(postId, userIdStr);
+                      else if (value == 'vote') _showVoteDetails(index);
                     },
                     itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
-                      const PopupMenuItem<String>(value: 'report', child: Row(children: [Icon(Icons.flag_outlined, size: 18), SizedBox(width: 8), Text('举报')])),
                       const PopupMenuItem<String>(value: 'tip', child: Row(children: [Icon(Icons.card_giftcard, size: 18, color: Colors.orange), SizedBox(width: 8), Text('打赏')])),
-                      const PopupMenuItem<String>(value: 'edit', child: Row(children: [Icon(Icons.edit_outlined, size: 18), SizedBox(width: 8), Text('编辑')])),
                       const PopupMenuItem<String>(value: 'vote', child: Row(children: [Icon(Icons.how_to_vote_outlined, size: 18, color: Colors.blueAccent), SizedBox(width: 8), Text('互动详情')])),
+                      
+                      // 严格受服务器权限管控的按钮
+                      if (canEdit) const PopupMenuItem<String>(value: 'edit', child: Row(children: [Icon(Icons.edit_outlined, size: 18), SizedBox(width: 8), Text('编辑本帖')])),
                       const PopupMenuItem<String>(value: 'warn', child: Row(children: [Icon(Icons.info_outline, size: 18, color: Colors.redAccent), SizedBox(width: 8), Text('下发警告')])),
-                      const PopupMenuDivider(),
-                      const PopupMenuItem<String>(value: 'delete', child: Row(children: [Icon(Icons.delete_outline, size: 18, color: Colors.red), SizedBox(width: 8), Text('删除', style: TextStyle(color: Colors.red))])),
+                      if (canDelete) const PopupMenuDivider(),
+                      if (canDelete) const PopupMenuItem<String>(value: 'delete', child: Row(children: [Icon(Icons.delete_outline, size: 18, color: Colors.red), SizedBox(width: 8), Text('删除', style: TextStyle(color: Colors.red))])),
                     ],
                   ),
                 ],
