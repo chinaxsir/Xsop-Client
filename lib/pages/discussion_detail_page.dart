@@ -28,11 +28,31 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
   String? _error;
   List<dynamic> _posts = [];
   Map<String, dynamic> _usersMap = {};
+  
+  // [图2核心修复：持有当前登录用户状态，用作最高权限校验]
+  FlarumUser? _currentUser;
 
   @override
   void initState() {
     super.initState();
     _loadDiscussionDetail();
+    _loadCurrentUser();
+  }
+
+  Future<void> _loadCurrentUser() async {
+    final userId = await widget.api.getUserId();
+    if (userId != null) {
+      try {
+        final res = await widget.api.getUser(userId);
+        if (mounted) setState(() => _currentUser = parseUser(res, widget.api.baseUrl));
+      } catch (_) {}
+    }
+  }
+
+  // 严苛鉴权：只有系统内置的 Admin(1) 或 Mod(4) 才能执行站务警告
+  bool get _canWarnUser {
+    if (_currentUser == null) return false;
+    return _currentUser!.groups.any((g) => g.id == '1' || g.id == '3' || g.id == '4');
   }
 
   Future<void> _loadDiscussionDetail() async {
@@ -63,18 +83,17 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
       });
     } catch (e) {
       setState(() {
-        _error = '无法加载帖子详情，请检查网络';
+        _error = '网络不佳，获取帖子详情失败';
         _isLoading = false;
       });
     }
   }
 
-  // [深刻修复：抛弃原生简单弹窗，先去服务端拿取最纯净的 Markdown 原文，再喂给全功能编辑器！]
   Future<void> _openEditorForEdit(int index) async {
     final post = _posts[index];
     final postId = post['id'];
     
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('正在提取原文...')));
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('提取Markdown源码中...')));
     String rawContent = post['attributes']?['content']?.toString() ?? '';
     
     try {
@@ -84,7 +103,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
 
     if (!mounted) return;
     
-    // 打开刚才写好的那个功能齐全的 EditorPage
     final result = await Navigator.push(
       context,
       MaterialPageRoute(
@@ -118,7 +136,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
               content: TextField(
                 controller: amountController,
                 keyboardType: TextInputType.number,
-                decoration: const InputDecoration(hintText: '请输入打赏金额 (整数)', border: OutlineInputBorder(), suffixText: 'XSD'),
+                decoration: const InputDecoration(hintText: '输入打赏金额 (整数)', border: OutlineInputBorder(), suffixText: 'XSD'),
               ),
               actions: [
                 TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消', style: TextStyle(color: Colors.grey))),
@@ -127,7 +145,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                   onPressed: isSubmitting ? null : () async {
                     final amount = int.tryParse(amountController.text.trim());
                     if (amount == null || amount <= 0) {
-                       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请输入有效金额')));
+                       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('金额不合法')));
                        return;
                     }
                     setStateDialog(() => isSubmitting = true);
@@ -139,7 +157,8 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                       }
                     } on DioException catch (e) {
                       if (mounted) {
-                         String errMsg = '打赏失败：可能余额不足或未开启对应权限接口';
+                         // 将服务端的深层原因抛出
+                         String errMsg = '打赏阻断：余额不足或不支持该动作';
                          try {
                            final errs = e.response?.data['errors'];
                            if (errs != null && errs is List && errs.isNotEmpty && errs[0]['detail'] != null) {
@@ -240,7 +259,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('警告下发成功！')));
                       }
                     } on DioException catch (e) {
-                       String errMsg = '警告下发失败，权限不足';
+                       String errMsg = '越权或配置错误，警告下发失败';
                        try {
                          final errs = e.response?.data['errors'];
                          if (errs != null && errs is List && errs.isNotEmpty && errs[0]['detail'] != null) {
@@ -281,13 +300,21 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
 
     try {
       await widget.api.likePost(postId, !currentIsLiked);
-    } on DioException catch (_) {
+    } on DioException catch (e) {
       if (mounted) {
         setState(() {
           _posts[index]['attributes']['isLiked'] = currentIsLiked;
           _posts[index]['attributes']['likesCount'] = currentLikesCount;
         });
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('操作权限不足')));
+        
+        String errMsg = '点赞行为被阻断';
+        try {
+          final errs = e.response?.data['errors'];
+          if (errs != null && errs is List && errs.isNotEmpty && errs[0]['detail'] != null) {
+            errMsg = errs[0]['detail'];
+          }
+        } catch (_) {}
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg)));
       }
     }
   }
@@ -299,8 +326,15 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
         setState(() { _posts.removeAt(index); });
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('删除成功')));
       }
-    } on DioException catch (_) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('删除失败：您无权执行此操作')));
+    } on DioException catch (e) {
+      String errMsg = '服务器驳回了删除请求';
+      try {
+        final errs = e.response?.data['errors'];
+        if (errs != null && errs is List && errs.isNotEmpty && errs[0]['detail'] != null) {
+          errMsg = errs[0]['detail'];
+        }
+      } catch (_) {}
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg)));
     }
   }
 
@@ -399,7 +433,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
         final isLiked = attrs['isLiked'] ?? false;
         final likesCount = attrs['likesCount'] ?? 0;
 
-        // [深度修复：绝不越权！依靠服务器底层下发的真实权限属性来控制菜单项显示]
         final bool canEdit = attrs['canEdit'] == true;
         final bool canDelete = attrs['canDelete'] == true;
 
@@ -484,9 +517,11 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                       const PopupMenuItem<String>(value: 'tip', child: Row(children: [Icon(Icons.card_giftcard, size: 18, color: Colors.orange), SizedBox(width: 8), Text('打赏')])),
                       const PopupMenuItem<String>(value: 'vote', child: Row(children: [Icon(Icons.how_to_vote_outlined, size: 18, color: Colors.blueAccent), SizedBox(width: 8), Text('互动详情')])),
                       
-                      // 严格依靠服务器 `canEdit` 显隐
                       if (canEdit) const PopupMenuItem<String>(value: 'edit', child: Row(children: [Icon(Icons.edit_outlined, size: 18), SizedBox(width: 8), Text('编辑本帖')])),
-                      const PopupMenuItem<String>(value: 'warn', child: Row(children: [Icon(Icons.info_outline, size: 18, color: Colors.redAccent), SizedBox(width: 8), Text('下发警告')])),
+                      
+                      // [核心修复图2：权限不足绝不显示，仅供管理员和版主下发警告！]
+                      if (_canWarnUser) const PopupMenuItem<String>(value: 'warn', child: Row(children: [Icon(Icons.info_outline, size: 18, color: Colors.redAccent), SizedBox(width: 8), Text('下发警告')])),
+                      
                       if (canDelete) const PopupMenuDivider(),
                       if (canDelete) const PopupMenuItem<String>(value: 'delete', child: Row(children: [Icon(Icons.delete_outline, size: 18, color: Colors.red), SizedBox(width: 8), Text('删除', style: TextStyle(color: Colors.red))])),
                     ],
