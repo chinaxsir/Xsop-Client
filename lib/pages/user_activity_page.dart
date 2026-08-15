@@ -289,12 +289,13 @@ class _UserActivityPageState extends State<UserActivityPage> {
             MaterialPageRoute(
               builder: (context) => DiscussionDetailPage(
                 api: widget.api,
-                // [核心修复点] 补全所有缺失的必需参数：id, title, commentCount, 和 createdAt
+                // [核心修复点：补全了所有必需参数，包括 tags: const [] 解决编译阻断]
                 discussion: Discussion(
                   id: discussionId, 
                   title: discussionTitle,
                   commentCount: 0, 
                   createdAt: timeStr != null ? DateTime.tryParse(timeStr) ?? DateTime.now() : DateTime.now(),
+                  tags: const [], 
                 ),
               ),
             ),
