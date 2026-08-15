@@ -31,7 +31,7 @@ class _UserActivityPageState extends State<UserActivityPage> {
   String? _error;
   List<dynamic> _items = [];
   List<dynamic> _included = [];
-  String _customEmptyMessage = '暂无相关功能记录。';
+  String _customEmptyMessage = '暂无相关记录。';
 
   @override
   void initState() {
@@ -44,7 +44,7 @@ class _UserActivityPageState extends State<UserActivityPage> {
       return await widget.api.getDynamicList(endpoint, queryParameters: query);
     } catch (e) {
       if (e is DioException) {
-        if (e.response?.statusCode == 404) return {'data': []};
+        if (e.response?.statusCode == 404 || e.response?.statusCode == 405) return {'data': []};
         if (e.response?.statusCode == 400 || e.response?.statusCode == 500) {
            try {
              final q = Map<String, dynamic>.from(query)..remove('include');
@@ -56,7 +56,6 @@ class _UserActivityPageState extends State<UserActivityPage> {
     }
   }
 
-  // [防崩溃守护] 提取数据的安全阀，杜绝 Map 冒充 List 引发致命崩溃
   List<dynamic> _extractData(dynamic responseData) {
     if (responseData == null) return [];
     if (responseData is List) return responseData;
@@ -91,7 +90,6 @@ class _UserActivityPageState extends State<UserActivityPage> {
            final type = p['attributes']?['contentType'];
            if (type != null && type != 'comment' && type != 'discussionRenamed') return false; 
            
-           // [致命串号拦截] 如果没有 UserId 或者 UserId 不是当前主页主人，一律封杀！
            final relUserId = p['relationships']?['user']?['data']?['id']?.toString();
            final attrUserId = p['attributes']?['userId']?.toString();
            
@@ -101,20 +99,23 @@ class _UserActivityPageState extends State<UserActivityPage> {
         }).toList();
         
         _included = [..._extractData(r1['included']), ..._extractData(r2['included'])];
-        _customEmptyMessage = '该功能项下暂无交互数据。';
+        _customEmptyMessage = '无相关功能记录。';
       } 
       else if (widget.activityType == 'warnings') {
-        final endpoints = ['/api/warnings', '/api/users/$uid/warnings', '/api/user-warnings'];
+        // [极度核心修复：根据截图1分析，站务警告的真实路由是 /api/warnings/{uid} !]
+        final endpoints = ['/api/warnings/$uid', '/api/warnings', '/api/users/$uid/warnings', '/api/user-warnings'];
         final Map<String, dynamic> uniqueMap = {};
         
         for (var ep in endpoints) {
           final r1 = await _safeFetch(ep, {'filter[user]': uid, 'include': 'addedByUser,post'});
           final r2 = await _safeFetch(ep, {'filter[user]': uid}); 
-          for(var i in [..._extractData(r1['data']), ..._extractData(r2['data'])]) {
+          final r3 = await _safeFetch(ep, {}); // 针对 /api/warnings/{id} 直接获取
+          for(var i in [..._extractData(r1['data']), ..._extractData(r2['data']), ..._extractData(r3['data'])]) {
             if (i['id'] != null) uniqueMap[i['id'].toString()] = i;
           }
           _included.addAll(_extractData(r1['included']));
           _included.addAll(_extractData(r2['included']));
+          _included.addAll(_extractData(r3['included']));
         }
         
         final rUser = await _safeFetch('/api/users/$uid', {'include': 'warnings'});
@@ -125,10 +126,9 @@ class _UserActivityPageState extends State<UserActivityPage> {
            }
         }
         _items = uniqueMap.values.toList();
-        _customEmptyMessage = '暂无符合权限校验的警告通报。';
+        _customEmptyMessage = '无相关功能记录。';
       } 
       else if (widget.activityType == 'tips') {
-        // [极度核心修复：根据截图分析，全面拥抱 money-rewards 专属路由！]
         final endpoints = [
           '/api/users/$uid/money-rewards', 
           '/api/tips', 
@@ -162,10 +162,10 @@ class _UserActivityPageState extends State<UserActivityPage> {
             }
         }
         _items = uniqueMap.values.toList();
-        _customEmptyMessage = '该账号暂无打赏交互记录。';
+        _customEmptyMessage = '无相关功能记录。';
       }
       else if (widget.activityType == 'money') {
-        // 资金流水探测
+        // [核心修复：如果没有独立的资金明细界面，尝试从 User 本身属性拉取余额流水，或探测其他常见流水路由]
         final endpoints = ['/api/users/$uid/money-transactions', '/api/user-money-histories', '/api/moneyHistory', '/api/users/$uid/moneyHistory', '/api/money-transfers', '/api/transactions'];
         final Map<String, dynamic> uniqueMap = {};
         for (var ep in endpoints) {
@@ -186,7 +186,7 @@ class _UserActivityPageState extends State<UserActivityPage> {
             }
         }
         _items = uniqueMap.values.toList();
-        _customEmptyMessage = '该账号暂无资金变更明细记录。';
+        _customEmptyMessage = '无相关功能记录。';
       }
 
       if (_items.isNotEmpty) {
@@ -210,12 +210,12 @@ class _UserActivityPageState extends State<UserActivityPage> {
             if (e.response?.statusCode == 404) {
                _items = []; _error = null; 
             } else if (e.response?.statusCode == 403) {
-               _error = '系统鉴权拒绝：无访问凭证或数据流被隔离。';
+               _error = '服务器拦截：无权查看这些数据。';
             } else {
-               _error = '链路通信故障，功能组件载入失败。';
+               _error = '网络传输发生故障。';
             }
           } else {
-             _error = '核心服务解析异常：${e.toString()}';
+             _error = '内部渲染防崩溃：${e.toString()}';
           }
           _isLoading = false;
         });
@@ -267,7 +267,7 @@ class _UserActivityPageState extends State<UserActivityPage> {
                  await Future.delayed(const Duration(milliseconds: 400));
                  _loadData();
               }, 
-              child: const Text('重载业务数据')
+              child: const Text('重新加载数据')
             ),
           ],
         ),
@@ -348,7 +348,7 @@ class _UserActivityPageState extends State<UserActivityPage> {
           const SizedBox(height: 12),
           Text(comment, style: const TextStyle(color: Colors.black87, fontSize: 14)),
           const SizedBox(height: 12),
-          Text('处罚执行人：$adminName  |  $timeDisplay', style: TextStyle(color: Colors.grey.shade500, fontSize: 12)),
+          Text('下发处理人：$adminName  |  $timeDisplay', style: TextStyle(color: Colors.grey.shade500, fontSize: 12)),
         ],
       ),
     );
@@ -387,9 +387,9 @@ class _UserActivityPageState extends State<UserActivityPage> {
             ],
           ),
           const SizedBox(height: 12),
-          Text('交互对象：$senderName  →  $recipientName', style: const TextStyle(color: Colors.black87, fontSize: 14)),
+          Text('资金流向：$senderName  →  $recipientName', style: const TextStyle(color: Colors.black87, fontSize: 14)),
           const SizedBox(height: 12),
-          Text('记录结算：$timeDisplay', style: TextStyle(color: Colors.grey.shade500, fontSize: 12)),
+          Text('业务时间：$timeDisplay', style: TextStyle(color: Colors.grey.shade500, fontSize: 12)),
         ],
       ),
     );
