@@ -38,21 +38,6 @@ class _UserActivityPageState extends State<UserActivityPage> {
     _loadData();
   }
 
-  // [无畏降级探针] 先带 include 请求，遇到服务器报错自动降级
-  Future<Map<String, dynamic>> _safeFetch(String endpoint, Map<String, dynamic> query) async {
-    try {
-      return await widget.api.getDynamicList(endpoint, queryParameters: query);
-    } catch (e) {
-      if (e is DioException && (e.response?.statusCode == 400 || e.response?.statusCode == 500)) {
-         try {
-           final q = Map<String, dynamic>.from(query)..remove('include');
-           return await widget.api.getDynamicList(endpoint, queryParameters: q);
-         } catch (_) {}
-      }
-      return {'data': []}; 
-    }
-  }
-
   Future<void> _loadData() async {
     setState(() { _isLoading = true; _error = null; });
     try {
@@ -63,46 +48,108 @@ class _UserActivityPageState extends State<UserActivityPage> {
         _items = res['data'] ?? [];
         _included = res['included'] ?? [];
         _customEmptyMessage = '该账号暂未发布任何主题。';
-      } else if (widget.activityType == 'posts') {
-        // [极度安全的串号拦截系统：用双重保险拒绝任何非当前用户的假回帖]
-        final res = await widget.api.getDynamicList('/api/posts', queryParameters: {'filter[user]': uid, 'filter[type]': 'comment', 'include': 'discussion'});
+      } 
+      else if (widget.activityType == 'posts') {
+        // [核心修复点：为查询追加 include=discussion,user 才能保证本地验证不抓瞎]
+        final res = await widget.api.getDynamicList('/api/posts', queryParameters: {
+          'filter[user]': uid, 
+          'filter[type]': 'comment', 
+          'include': 'discussion,user'
+        });
         final rawPosts = res['data'] as List<dynamic>? ?? [];
         
         _items = rawPosts.where((p) {
            final relUserId = p['relationships']?['user']?['data']?['id']?.toString();
-           return relUserId == uid; // 铁律：不是自己的回帖立刻丢弃
+           final attrUserId = p['attributes']?['userId']?.toString();
+           if (relUserId != null) return relUserId == uid;
+           if (attrUserId != null) return attrUserId == uid;
+           return true; 
         }).toList();
         
         _included = res['included'] ?? [];
         _customEmptyMessage = '无回复记录。';
-      } else if (widget.activityType == 'warnings') {
-        // 覆盖主流 Flarum 的各种警告查询路径
-        final res1 = await _safeFetch('/api/warnings', {'filter[user]': uid, 'include': 'addedByUser,post'});
-        final res2 = await _safeFetch('/api/users/$uid/warnings', {'include': 'addedByUser,post'});
-        
-        final Map<String, dynamic> uniqueMap = {};
-        for(var i in [...(res1['data'] ?? []), ...(res2['data'] ?? [])]) {
-          if (i['id'] != null) uniqueMap[i['id'].toString()] = i;
+      } 
+      else if (widget.activityType == 'warnings') {
+        List<dynamic> wData = [];
+        final wEndpoints = ['/api/warnings', '/api/users/$uid/warnings', '/api/user-warnings'];
+        for (var ep in wEndpoints) {
+           try {
+               final r = await widget.api.getDynamicList(ep, queryParameters: {'filter[user]': uid, 'include': 'addedByUser,post'});
+               wData.addAll(r['data'] ?? []);
+               _included.addAll(r['included'] ?? []);
+           } catch(_) {
+               try {
+                   final r = await widget.api.getDynamicList(ep, queryParameters: {'filter[user]': uid});
+                   wData.addAll(r['data'] ?? []);
+                   _included.addAll(r['included'] ?? []);
+               } catch(_) {}
+           }
         }
-        _items = uniqueMap.values.toList();
-        _included = [...(res1['included'] ?? []), ...(res2['included'] ?? [])];
-        _customEmptyMessage = '暂无任何站务违规记录。';
-      } else if (widget.activityType == 'tips') {
-        final res1 = await _safeFetch('/api/tips', {'filter[user]': uid, 'include': 'sender,recipient,post'});
-        final res2 = await _safeFetch('/api/moneyHistory', {'filter[user]': uid});
-        final res3 = await _safeFetch('/api/users/$uid/tips', {'include': 'sender,recipient,post'});
+        final Map<String, dynamic> wUnique = {};
+        for (var i in wData) if (i['id'] != null) wUnique[i['id'].toString()] = i;
+        _items = wUnique.values.toList();
+        _customEmptyMessage = '暂无站务警告记录。';
+      } 
+      else if (widget.activityType == 'tips') {
+        List<dynamic> tData = [];
+        // [极度暴力的打赏探针：不论是原版还是魔改，全方面扫荡该用户的资产记录]
+        final tEndpoints = ['/api/tips', '/api/rewards', '/api/moneyHistory', '/api/users/$uid/tips', '/api/users/$uid/moneyHistory', '/api/money-transfers'];
+        final tFilters = ['filter[user]', 'filter[recipient]', 'filter[sender]'];
         
-        final Map<String, dynamic> uniqueMap = {};
-        for(var i in [...(res1['data'] ?? []), ...(res2['data'] ?? []), ...(res3['data'] ?? [])]) {
-          if (i['id'] != null) uniqueMap[i['id'].toString()] = i;
+        for (var ep in tEndpoints) {
+            if (ep.contains(uid)) {
+                try {
+                   final r = await widget.api.getDynamicList(ep, queryParameters: {'include': 'sender,recipient,post'});
+                   tData.addAll(r['data'] ?? []);
+                   _included.addAll(r['included'] ?? []);
+                } catch(_) {
+                   try {
+                       final r = await widget.api.getDynamicList(ep);
+                       tData.addAll(r['data'] ?? []);
+                       _included.addAll(r['included'] ?? []);
+                   } catch(_) {}
+                }
+                continue;
+            }
+            for (var fk in tFilters) {
+                try {
+                   final r = await widget.api.getDynamicList(ep, queryParameters: {fk: uid, 'include': 'sender,recipient,post'});
+                   tData.addAll(r['data'] ?? []);
+                   _included.addAll(r['included'] ?? []);
+                } catch(_) {
+                   try {
+                       final r = await widget.api.getDynamicList(ep, queryParameters: {fk: uid});
+                       tData.addAll(r['data'] ?? []);
+                       _included.addAll(r['included'] ?? []);
+                   } catch(_) {}
+                }
+            }
         }
-        _items = uniqueMap.values.toList();
-        _included = [...(res1['included'] ?? []), ...(res2['included'] ?? []), ...(res3['included'] ?? [])];
-        _customEmptyMessage = '暂无打赏或财富流通流水。';
+        
+        final Map<String, dynamic> tUnique = {};
+        for (var i in tData) {
+           if (i != null && i['id'] != null) {
+               final rels = i['relationships'] ?? {};
+               final attrs = i['attributes'] ?? {};
+               bool isRelated = false;
+               
+               for (var val in rels.values) {
+                 if (val is Map && val['data'] is Map && val['data']['id'].toString() == uid) isRelated = true;
+                 if (val is Map && val['data'] is List) {
+                   for (var v in val['data']) {
+                     if (v is Map && v['id'].toString() == uid) isRelated = true;
+                   }
+                 }
+               }
+               if (attrs.values.any((v) => v.toString() == uid)) isRelated = true;
+               if (isRelated) tUnique[i['id'].toString()] = i;
+           }
+        }
+        _items = tUnique.values.toList();
+        _customEmptyMessage = '暂无打赏或资产流水。';
       }
 
       if (_items.isNotEmpty) {
-        // [修复图1/图2 死转圈崩溃：加入了日期空值防御，绝不再报错阻断]
         _items.sort((a, b) {
           final timeA = a['attributes']?['createdAt'];
           final timeB = b['attributes']?['createdAt'];
