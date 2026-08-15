@@ -63,18 +63,8 @@ class ApiClient {
     return data;
   }
 
-  Future<Map<String, dynamic>> getDiscussions({
-    int page = 1,
-    int pageSize = 20,
-    String? tag,
-    String? author, 
-    String? sort,
-  }) async {
-    final query = <String, dynamic>{
-      'page[number]': page,
-      'page[size]': pageSize,
-    };
-    
+  Future<Map<String, dynamic>> getDiscussions({int page = 1, int pageSize = 20, String? tag, String? author, String? sort}) async {
+    final query = <String, dynamic>{'page[number]': page, 'page[size]': pageSize};
     if (tag != null && tag.isNotEmpty) query['filter[tag]'] = tag.trim();
     
     List<String> searchQueries = [];
@@ -87,10 +77,7 @@ class ApiClient {
   }
 
   Future<Map<String, dynamic>> getDiscussion(int id, {int page = 1, int pageSize = 20}) async {
-    final response = await _dio.get(
-      '/api/discussions/$id',
-      queryParameters: {'page[number]': page, 'page[size]': pageSize, 'include': 'user,posts,posts.user'},
-    );
+    final response = await _dio.get('/api/discussions/$id', queryParameters: {'page[number]': page, 'page[size]': pageSize, 'include': 'user,posts,posts.user'});
     return _asMap(response.data);
   }
 
@@ -116,15 +103,7 @@ class ApiClient {
   }
 
   Future<Map<String, dynamic>> createPost(int discussionId, String content) async {
-    final data = {
-      "data": {
-        "type": "posts",
-        "attributes": {"content": content},
-        "relationships": {
-          "discussion": {"data": {"type": "discussions", "id": discussionId.toString()}}
-        }
-      }
-    };
+    final data = {"data": {"type": "posts", "attributes": {"content": content}, "relationships": {"discussion": {"data": {"type": "discussions", "id": discussionId.toString()}}}}};
     final response = await _dio.post('/api/posts', data: data);
     return _asMap(response.data);
   }
@@ -141,45 +120,38 @@ class ApiClient {
 
   Future<void> warnUser(int userId, {int? postId, int strikes = 0, String? publicComment, String? privateComment}) async {
     final Map<String, dynamic> data = {
-      "data": {
-        "type": "warnings",
-        "attributes": {"strikes": strikes, "publicComment": publicComment ?? "", "privateComment": privateComment ?? ""},
-        "relationships": {"user": {"data": {"type": "users", "id": userId.toString()}}}
-      }
+      "data": {"type": "warnings", "attributes": {"strikes": strikes, "publicComment": publicComment ?? "", "privateComment": privateComment ?? ""}, "relationships": {"user": {"data": {"type": "users", "id": userId.toString()}}}}
     };
-    if (postId != null) {
-      data["data"]["relationships"]["post"] = {"data": {"type": "posts", "id": postId.toString()}};
-    }
+    if (postId != null) data["data"]["relationships"]["post"] = {"data": {"type": "posts", "id": postId.toString()}};
     await _dio.post('/api/warnings', data: data);
   }
 
+  // [修复：支持第三方打赏插件的标准 JSON 格式提交]
   Future<void> tipPost(int postId, int amount) async {
-    await _dio.post('/api/posts/$postId/tip', data: {
-      "data": {"attributes": {"amount": amount}}
-    });
+    try {
+      await _dio.post('/api/tips', data: {
+        "data": {"type": "tips", "attributes": {"amount": amount}, "relationships": {"post": {"data": {"type": "posts", "id": postId.toString()}}}}
+      });
+    } catch (e) {
+      // 兼容某些老旧插件的回退路由
+      await _dio.post('/api/posts/$postId/tip', data: {
+        "data": {"attributes": {"amount": amount}}
+      });
+    }
   }
 
   Future<void> reportPost(int postId, String reason, String? detail) async {
     await _dio.post('/api/flags', data: {
-      "data": {
-        "type": "flags",
-        "attributes": {"reason": reason, "reasonDetail": detail ?? ""},
-        "relationships": {"post": {"data": {"type": "posts", "id": postId.toString()}}}
-      }
+      "data": {"type": "flags", "attributes": {"reason": reason, "reasonDetail": detail ?? ""}, "relationships": {"post": {"data": {"type": "posts", "id": postId.toString()}}}}
     });
   }
 
   Future<void> likePost(int postId, bool isLiked) async {
-    await _dio.patch('/api/posts/$postId', data: {
-      "data": {"type": "posts", "id": postId.toString(), "attributes": {"isLiked": isLiked}}
-    });
+    await _dio.patch('/api/posts/$postId', data: {"data": {"type": "posts", "id": postId.toString(), "attributes": {"isLiked": isLiked}}});
   }
 
-  // [核心修复：获取通知时，强力注入发送人和关联事项的数据字典，告别单一的英文单词]
   Future<Map<String, dynamic>> getNotifications() async {
-    final response = await _dio.get('/api/notifications', queryParameters: {
-      'include': 'fromUser,subject'
-    });
+    final response = await _dio.get('/api/notifications', queryParameters: {'include': 'fromUser,subject'});
     return _asMap(response.data);
   }
 
@@ -191,9 +163,7 @@ class ApiClient {
     final files = data['data'] as List<dynamic>?;
     if (files != null && files.isNotEmpty) {
        final attrs = files.first['attributes'] as Map<String, dynamic>?;
-       if (attrs != null) {
-         return {'url': attrs['url']?.toString() ?? '', 'baseName': attrs['baseName']?.toString() ?? name};
-       }
+       if (attrs != null) return {'url': attrs['url']?.toString() ?? '', 'baseName': attrs['baseName']?.toString() ?? name};
     }
     return null;
   }
