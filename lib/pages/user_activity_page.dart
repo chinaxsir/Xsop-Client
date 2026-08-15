@@ -31,7 +31,7 @@ class _UserActivityPageState extends State<UserActivityPage> {
   String? _error;
   List<dynamic> _items = [];
   List<dynamic> _included = [];
-  String _customEmptyMessage = '暂无相关记录。';
+  String _customEmptyMessage = '无相关功能记录。';
 
   @override
   void initState() {
@@ -88,11 +88,15 @@ class _UserActivityPageState extends State<UserActivityPage> {
         
         _items = uniqueMap.values.where((p) {
            final type = p['attributes']?['contentType'];
-           if (type != null && type != 'comment' && type != 'discussionRenamed') return false; 
+           // [灰屏修复] 如果不是 comment（比如是管理员的删帖日志），我们放行，不强制拦截，让它显示为 DefaultItem
+           if (type != null && type != 'comment' && type != 'discussionRenamed') {
+              // do nothing, let it pass
+           }
            
            final relUserId = p['relationships']?['user']?['data']?['id']?.toString();
            final attrUserId = p['attributes']?['userId']?.toString();
            
+           // 必须属于当前被查看的人，否则就是串号的脏数据
            if (relUserId != null && relUserId != uid) return false;
            if (attrUserId != null && attrUserId != uid) return false;
            return true; 
@@ -102,14 +106,14 @@ class _UserActivityPageState extends State<UserActivityPage> {
         _customEmptyMessage = '无相关功能记录。';
       } 
       else if (widget.activityType == 'warnings') {
-        // [极度核心修复：根据截图1分析，站务警告的真实路由是 /api/warnings/{uid} !]
+        // [核心修复：完美应用您截图中的真实路由 /api/warnings/4]
         final endpoints = ['/api/warnings/$uid', '/api/warnings', '/api/users/$uid/warnings', '/api/user-warnings'];
         final Map<String, dynamic> uniqueMap = {};
         
         for (var ep in endpoints) {
           final r1 = await _safeFetch(ep, {'filter[user]': uid, 'include': 'addedByUser,post'});
           final r2 = await _safeFetch(ep, {'filter[user]': uid}); 
-          final r3 = await _safeFetch(ep, {}); // 针对 /api/warnings/{id} 直接获取
+          final r3 = await _safeFetch(ep, {}); // 直接针对 /api/warnings/{id} 发起无参数请求
           for(var i in [..._extractData(r1['data']), ..._extractData(r2['data']), ..._extractData(r3['data'])]) {
             if (i['id'] != null) uniqueMap[i['id'].toString()] = i;
           }
@@ -118,17 +122,23 @@ class _UserActivityPageState extends State<UserActivityPage> {
           _included.addAll(_extractData(r3['included']));
         }
         
-        final rUser = await _safeFetch('/api/users/$uid', {'include': 'warnings'});
-        _included.addAll(_extractData(rUser['included']));
-        for (var i in _extractData(rUser['included'])) {
-           if (i['type'] == 'warnings') {
-               uniqueMap[i['id'].toString()] = i;
+        // 【防遗漏】：如果上面都拉不到，拉取全部数据，手动筛选该用户的警告（这对系统管理员很有用）
+        if (uniqueMap.isEmpty) {
+           final rAll = await _safeFetch('/api/warnings', {'include': 'addedByUser,post'});
+           for(var i in _extractData(rAll['data'])) {
+              final relUserId = i['relationships']?['user']?['data']?['id']?.toString();
+              if (relUserId == uid) {
+                  uniqueMap[i['id'].toString()] = i;
+              }
            }
+           _included.addAll(_extractData(rAll['included']));
         }
+
         _items = uniqueMap.values.toList();
-        _customEmptyMessage = '无相关功能记录。';
+        _customEmptyMessage = '暂无符合权限校验的警告通报。';
       } 
       else if (widget.activityType == 'tips') {
+        // [核心修复：引入基于前次截图的 /api/users/{id}/money-rewards 真实路由]
         final endpoints = [
           '/api/users/$uid/money-rewards', 
           '/api/tips', 
@@ -152,6 +162,7 @@ class _UserActivityPageState extends State<UserActivityPage> {
           _included.addAll(_extractData(r5['included']));
         }
         
+        // 【防遗漏】：探测 User 属性绑定的各种扩展节点
         for (var inc in ['tips', 'rewards', 'tips_given', 'tips_received', 'moneyRewards']) {
             final rUser = await _safeFetch('/api/users/$uid', {'include': inc});
             _included.addAll(_extractData(rUser['included']));
@@ -165,7 +176,7 @@ class _UserActivityPageState extends State<UserActivityPage> {
         _customEmptyMessage = '无相关功能记录。';
       }
       else if (widget.activityType == 'money') {
-        // [核心修复：如果没有独立的资金明细界面，尝试从 User 本身属性拉取余额流水，或探测其他常见流水路由]
+        // [资金明细探针重塑]
         final endpoints = ['/api/users/$uid/money-transactions', '/api/user-money-histories', '/api/moneyHistory', '/api/users/$uid/moneyHistory', '/api/money-transfers', '/api/transactions'];
         final Map<String, dynamic> uniqueMap = {};
         for (var ep in endpoints) {
@@ -267,13 +278,14 @@ class _UserActivityPageState extends State<UserActivityPage> {
                  await Future.delayed(const Duration(milliseconds: 400));
                  _loadData();
               }, 
-              child: const Text('重新加载数据')
+              child: const Text('重新加载网络数据')
             ),
           ],
         ),
       );
     }
     
+    // [灰屏修复：无论 items 为空还是类型不匹配，只要执行到这里就一定要渲染占位图，绝不白板！]
     if (_items.isEmpty) {
       return CustomScrollView(
         physics: const AlwaysScrollableScrollPhysics(),
@@ -305,11 +317,11 @@ class _UserActivityPageState extends State<UserActivityPage> {
         final type = item['type'];
         
         if (type == 'warnings') return _buildWarningItem(item);
-        if (type == 'tips' || type == 'rewards' || type == 'post_tips' || type == 'moneyRewards') return _buildTipItem(item);
+        if (type == 'tips' || type == 'rewards' || type == 'post_tips' || type == 'moneyRewards' || type == 'money-rewards') return _buildTipItem(item);
         if (type == 'moneyHistory' || type == 'user-money-histories' || type == 'money_transfers' || type == 'transactions' || type == 'moneyTransactions') return _buildMoneyItem(item);
         if (type == 'posts') return _buildPostItem(item);
         
-        return _buildDefaultItem(item);
+        return _buildDefaultItem(item); // 兜底渲染系统记录（图2）
       },
     );
   }
@@ -538,7 +550,8 @@ class _UserActivityPageState extends State<UserActivityPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(attrs['title'] ?? '基础环境数据', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Colors.black87)),
+          // 兜底日志显示，防止报错导致整个列表不可见
+          Text(attrs['title'] ?? attrs['description'] ?? attrs['reason'] ?? '系统底层数据交互', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Colors.black87)),
           const SizedBox(height: 8),
           Text(timeDisplay, style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
         ],
