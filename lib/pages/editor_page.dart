@@ -2,7 +2,8 @@
 
 import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
-import 'package:image_picker/image_picker.dart'; // 引入真实的媒体选择器
+import 'package:image_picker/image_picker.dart';
+import 'package:file_picker/file_picker.dart'; // 务必确保 pubspec.yaml 中已添加 file_picker: ^6.0.0
 import 'package:xsop_forum/api/api_client.dart';
 import 'package:xsop_forum/models/flarum_models.dart';
 
@@ -10,12 +11,18 @@ class EditorPage extends StatefulWidget {
   final ApiClient api;
   final Discussion? discussion;
   final List<FlarumTag>? availableTags;
+  
+  // [图2/图3修复：接收传入的旧帖子数据，变身全功能编辑页]
+  final Map<String, dynamic>? postToEdit; 
+  final String? initialContent;
 
   const EditorPage({
     super.key,
     required this.api,
     this.discussion,
     this.availableTags,
+    this.postToEdit,
+    this.initialContent,
   });
 
   @override
@@ -27,7 +34,7 @@ class _EditorPageState extends State<EditorPage> {
   final _contentController = TextEditingController();
   
   bool _isSubmitting = false;
-  bool _isUploading = false; // 真实上传状态
+  bool _isUploading = false;
   bool _isLoadingTags = false;
   String? _tagError;
   
@@ -35,11 +42,18 @@ class _EditorPageState extends State<EditorPage> {
   List<FlarumTag> _selectedTags = [];
 
   bool get isReply => widget.discussion != null;
+  bool get isEdit => widget.postToEdit != null;
 
   @override
   void initState() {
     super.initState();
-    if (!isReply) {
+    
+    // 如果是编辑模式，填入传进来的旧 Markdown 源码
+    if (isEdit) {
+      _contentController.text = widget.initialContent ?? '';
+    }
+
+    if (!isReply && !isEdit) {
       if (widget.availableTags != null && widget.availableTags!.isNotEmpty) {
         _tags = widget.availableTags!;
       } else {
@@ -59,7 +73,7 @@ class _EditorPageState extends State<EditorPage> {
         });
       }
     } catch (e) {
-      if (mounted) setState(() { _tagError = '无法获取板块标签，请下拉重试。'; _isLoadingTags = false; });
+      if (mounted) setState(() { _tagError = '无法获取板块标签，网络可能已断开。'; _isLoadingTags = false; });
     }
   }
 
@@ -68,29 +82,32 @@ class _EditorPageState extends State<EditorPage> {
     final content = _contentController.text.trim();
 
     if (content.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请输入内容')));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('正文不能为空')));
       return;
     }
-    if (!isReply && title.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请输入标题')));
+    if (!isReply && !isEdit && title.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('标题不能为空')));
       return;
     }
 
     setState(() => _isSubmitting = true);
 
     try {
-      if (isReply) {
+      if (isEdit) {
+        final postId = int.parse(widget.postToEdit!['id']);
+        await widget.api.editPost(postId, content);
+      } else if (isReply) {
         await widget.api.createPost(int.parse(widget.discussion!.id), content);
       } else {
         final tagIds = _selectedTags.map((t) => t.id).toList();
         await widget.api.createDiscussion(title: title, content: content, tagIds: tagIds);
       }
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(isReply ? '回复成功' : '发布成功')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(isEdit ? '编辑成功' : (isReply ? '回复成功' : '发布成功'))));
         Navigator.pop(context, true);
       }
     } on DioException catch (e) {
-      String errMsg = '发布失败：网络或权限异常';
+      String errMsg = '提交失败：网络或权限异常';
       try {
         final errs = e.response?.data['errors'];
         if (errs != null && errs is List && errs.isNotEmpty && errs[0]['detail'] != null) {
@@ -119,41 +136,68 @@ class _EditorPageState extends State<EditorPage> {
     );
   }
 
-  // [深刻修复：接入手机底层相册，真枪实弹上传到服务器！]
   Future<void> _pickAndUploadImage() async {
     final picker = ImagePicker();
     final pickedFile = await picker.pickImage(source: ImageSource.gallery);
     if (pickedFile == null) return;
+    _uploadLogic(pickedFile.path, pickedFile.name, true);
+  }
 
-    setState(() => _isUploading = true);
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('正在上传图片，请稍候...')));
-
+  // [发帖功能修复：接入真实的 file_picker 上传附件]
+  Future<void> _pickAndUploadFile() async {
     try {
-      final uploadRes = await widget.api.uploadFile(pickedFile.path, filename: pickedFile.name);
-      if (uploadRes != null && uploadRes['url'] != null) {
-        // 成功获取服务器 URL，回填至输入框
-        final url = uploadRes['url'];
-        final baseName = uploadRes['baseName'];
-        _insertMarkdown('![$baseName]($url)', '\n');
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('图片上传成功！')));
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('图片上传失败，服务器返回空数据。')));
+      final result = await FilePicker.platform.pickFiles();
+      if (result == null || result.files.isEmpty) return;
+      final file = result.files.first;
+      if (file.path != null) {
+        _uploadLogic(file.path!, file.name, false);
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('上传异常：可能未配置图床或文件超出限制')));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('文件选择被取消或发生异常')));
+    }
+  }
+
+  Future<void> _uploadLogic(String path, String fileName, bool isImage) async {
+    setState(() => _isUploading = true);
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('正在上传，请稍候...')));
+    try {
+      final uploadRes = await widget.api.uploadFile(path, filename: fileName);
+      if (uploadRes != null && uploadRes['url'] != null) {
+        final url = uploadRes['url'];
+        final baseName = uploadRes['baseName'];
+        if (isImage) {
+          _insertMarkdown('![$baseName]($url)', '\n');
+        } else {
+          _insertMarkdown('[$baseName]($url)', '\n');
+        }
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('上传成功！')));
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('上传失败，服务器返回数据异常。')));
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('上传异常：超出大小限制或未配置相应插件')));
     } finally {
       setState(() => _isUploading = false);
     }
   }
 
+  // [图1修复：精准提取并匹配您提供的完整提现申请模板]
   void _handleTagSelection(FlarumTag tag, bool isSelected) {
     setState(() {
       if (isSelected) {
         _selectedTags.add(tag);
-        if (tag.slug.toLowerCase().contains('cash') || tag.name.contains('收费')) {
-           if (!_contentController.text.contains('[charge=')) {
-              _contentController.text += '\n[charge=10]\n隐藏内容\n[/charge]\n';
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已自动拉取付费阅读模板')));
+        if (tag.slug.toLowerCase().contains('cash') || tag.name.contains('Cash') || tag.name.contains('收费')) {
+           if (!_contentController.text.contains('提现申请核验单')) {
+              _contentController.text += '''
+💸 提现申请核验单
+*请仔细核对以下信息，防刷单核对用。*
+
+- **提现金额 (XSD)：** [填写纯数字，最低100]
+- **收款方式：** [填写方式，如支付宝、微信]
+- **收款账号：** [填写完整账号]
+- **真实姓名：** [填写您的真实姓名]
+''';
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已自动拉取 Cash 提现申请模板')));
            }
         }
       } else {
@@ -164,10 +208,12 @@ class _EditorPageState extends State<EditorPage> {
 
   @override
   Widget build(BuildContext context) {
+    String pageTitle = isEdit ? '编辑内容' : (isReply ? '回复主题' : '发布新主题');
+
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
-        title: Text(isReply ? '回复主题' : '发布新主题', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+        title: Text(pageTitle, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
         backgroundColor: Colors.white,
         surfaceTintColor: Colors.transparent,
         actions: [
@@ -184,8 +230,8 @@ class _EditorPageState extends State<EditorPage> {
       ),
       body: Column(
         children: [
-          if (!isReply) _buildHeader(),
-          if (_isUploading) const LinearProgressIndicator(minHeight: 2), // 顶部加入真实的上传进度条
+          if (!isReply && !isEdit) _buildHeader(),
+          if (_isUploading) const LinearProgressIndicator(minHeight: 2),
           const Divider(height: 1, thickness: 0.5, color: Color(0xFFE5E5EA)),
           Expanded(
             child: Padding(
@@ -222,19 +268,21 @@ class _EditorPageState extends State<EditorPage> {
               IconButton(icon: const Icon(Icons.format_italic, color: Colors.black87), tooltip: '斜体', onPressed: () => _insertMarkdown('*', '*')),
               IconButton(icon: const Icon(Icons.link, color: Colors.black87), tooltip: '插入链接', onPressed: () => _insertMarkdown('[', '](https://)')),
               Container(width: 1, height: 24, color: Colors.grey.shade300, margin: const EdgeInsets.symmetric(horizontal: 8)),
-              
-              // [深刻修复：真实的图片上传按钮接入]
               IconButton(
                 icon: const Icon(Icons.image_outlined, color: Colors.black87), 
                 tooltip: '上传图片', 
                 onPressed: _isUploading ? null : _pickAndUploadImage,
               ),
-              
+              IconButton(
+                icon: const Icon(Icons.attach_file, color: Colors.black87), 
+                tooltip: '上传附件', 
+                onPressed: _isUploading ? null : _pickAndUploadFile,
+              ),
               Container(width: 1, height: 24, color: Colors.grey.shade300, margin: const EdgeInsets.symmetric(horizontal: 8)),
               TextButton.icon(
                 icon: const Icon(Icons.lock_outline, size: 18, color: Colors.orange),
                 label: const Text('付费阅读', style: TextStyle(color: Colors.orange)),
-                onPressed: () => _insertMarkdown('[charge=10]\n隐藏的付费内容\n', '[/charge]'),
+                onPressed: () => _insertMarkdown('[charge=10]\n在这里输入付费隐藏内容...\n', '[/charge]'),
               ),
             ],
           ),
