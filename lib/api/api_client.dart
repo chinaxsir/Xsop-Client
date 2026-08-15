@@ -125,28 +125,38 @@ class ApiClient {
     await _dio.post('/api/warnings', data: data);
   }
 
-  // [无敌探测引擎：组合所有的 Endpoint 和 Payload 格式进行地毯式重试]
+  // [深刻修复：打赏接口强力兼容！]
   Future<void> tipPost(int postId, int amount) async {
-    DioException? lastErr;
-    final payloads = [
-      {"data": {"type": "tips", "attributes": {"amount": amount}, "relationships": {"post": {"data": {"type": "posts", "id": postId.toString()}}}}},
-      {"data": {"type": "post_tips", "attributes": {"amount": amount}, "relationships": {"post": {"data": {"type": "posts", "id": postId.toString()}}}}},
-      {"data": {"attributes": {"amount": amount}}},
-      {"amount": amount}
-    ];
-    final endpoints = ['/api/posts/$postId/tip', '/api/posts/$postId/reward', '/api/tips'];
-
-    for (final ep in endpoints) {
-      for (final p in payloads) {
-        try {
-          await _dio.post(ep, data: p);
-          return; // 只要有一种组合成功，立刻返回
-        } on DioException catch (e) {
-          lastErr = e;
+    // 根据 Flarum Antoine/Money 插件的标准 JSON:API 格式构造请求
+    try {
+      await _dio.post('/api/posts/$postId/tip', data: {
+        "data": {
+          "attributes": {"amount": amount}
         }
+      });
+      return;
+    } catch (e) {
+      // 备用兜底路由 1：全扁平化
+      try {
+        await _dio.post('/api/posts/$postId/tip', data: {"amount": amount});
+        return;
+      } catch (_) {}
+      
+      // 备用兜底路由 2：通过 tips 专用入口
+      try {
+        await _dio.post('/api/tips', data: {
+          "data": {
+            "type": "tips",
+            "attributes": {"amount": amount},
+            "relationships": {"post": {"data": {"type": "posts", "id": postId.toString()}}}
+          }
+        });
+        return;
+      } catch (finalError) {
+        // 如果全崩了，抛出最后一个报错让前端提示
+        throw finalError;
       }
     }
-    if (lastErr != null) throw lastErr;
   }
 
   Future<void> reportPost(int postId, String reason, String? detail) async {
