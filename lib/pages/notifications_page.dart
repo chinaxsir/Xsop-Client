@@ -17,7 +17,7 @@ class _NotificationsPageState extends State<NotificationsPage> with WidgetsBindi
   bool _isLoading = true;
   String? _error;
   List<dynamic> _notifications = [];
-  List<dynamic> _included = []; // 引入关联数据池
+  List<dynamic> _included = []; 
   
   Timer? _pollingTimer;
 
@@ -57,11 +57,10 @@ class _NotificationsPageState extends State<NotificationsPage> with WidgetsBindi
         });
       }
     } catch (e) {
-      if (mounted && !silent) setState(() { _error = '数据同步异常，请检视网络状态'; _isLoading = false; });
+      if (mounted && !silent) setState(() { _error = '数据同步进程发生异常，请核对网络链路状态。'; _isLoading = false; });
     }
   }
 
-  // [动态匹配引擎：从 included 池中捕获触发动作的用户信息]
   Map<String, dynamic>? _getFromUser(Map<String, dynamic> notif) {
     final fromUserId = notif['relationships']?['fromUser']?['data']?['id']?.toString();
     if (fromUserId == null) return null;
@@ -72,22 +71,21 @@ class _NotificationsPageState extends State<NotificationsPage> with WidgetsBindi
     }
   }
 
-  // [官方语言格式化引擎：将系统的动作代码转化为官方描述模板]
   String _formatNotificationContent(String contentType, String? fromUserName) {
-    final name = fromUserName ?? '系统';
+    final name = fromUserName ?? '系统进程';
     switch (contentType) {
       case 'warning':
         return '系统已下发来自 $name 的站务违规处理通报';
       case 'postLiked':
-        return '$name 肯定并点赞了您的发言';
+        return '$name 肯定并点赞了您的业务数据';
       case 'postMentioned':
-        return '$name 在交互记录中提及了您';
+        return '$name 在交互日志中引用了您的标识';
       case 'newPost':
-        return '$name 对您的主题进行了跟进回复';
+        return '$name 对您的主题实体提交了新的数据追加';
       case 'discussionRenamed':
-        return '$name 对关联主题的名称进行了修订';
+        return '$name 针对关联业务项的名称执行了修订指令';
       default:
-        return '接收到新的系统事务状态变动 ($contentType)';
+        return '接收到新的系统事务状态变更日志 ($contentType)';
     }
   }
 
@@ -98,7 +96,7 @@ class _NotificationsPageState extends State<NotificationsPage> with WidgetsBindi
       appBar: AppBar(
         backgroundColor: Colors.white,
         surfaceTintColor: Colors.transparent,
-        title: const Text('通知中心', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+        title: const Text('系统通知中心', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(0.5),
           child: Container(color: const Color(0xFFE5E5EA), height: 0.5),
@@ -122,7 +120,15 @@ class _NotificationsPageState extends State<NotificationsPage> with WidgetsBindi
             const SizedBox(height: 16),
             Text(_error!, style: TextStyle(color: Colors.grey.shade500, fontSize: 14)),
             const SizedBox(height: 16),
-            FilledButton.tonal(onPressed: () => _loadData(), child: const Text('重新建立链接')),
+            // [核心修复：加入 400 毫秒 UI 缓冲 tick，防止死连接秒拒导致的重试死循环]
+            FilledButton.tonal(
+              onPressed: () async {
+                setState(() { _isLoading = true; _error = null; });
+                await Future.delayed(const Duration(milliseconds: 400));
+                _loadData();
+              }, 
+              child: const Text('重新发起通信请求')
+            ),
           ],
         ),
       );
@@ -139,7 +145,7 @@ class _NotificationsPageState extends State<NotificationsPage> with WidgetsBindi
                 children: [
                   Icon(Icons.notifications_none, size: 56, color: Colors.grey.shade300),
                   const SizedBox(height: 16),
-                  Text('当前业务列表暂无新通知', style: TextStyle(color: Colors.grey.shade400, fontSize: 14)),
+                  Text('当前系统业务栈内暂无新的通知下发。', style: TextStyle(color: Colors.grey.shade400, fontSize: 14)),
                 ],
               ),
             ),
@@ -180,9 +186,6 @@ class _NotificationsPageState extends State<NotificationsPage> with WidgetsBindi
                   child: Text(formatRelativeTime(DateTime.parse(timeStr)), style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
                 )
               : null,
-          onTap: () {
-            // [预留扩展接口] 针对各项事务的细则进行跳转
-          },
         );
       },
     );
