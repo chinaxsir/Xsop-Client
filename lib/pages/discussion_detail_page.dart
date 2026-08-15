@@ -29,7 +29,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
   List<dynamic> _posts = [];
   Map<String, dynamic> _usersMap = {};
   
-  // [图2核心修复：持有当前登录用户状态，用作最高权限校验]
   FlarumUser? _currentUser;
 
   @override
@@ -49,7 +48,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
     }
   }
 
-  // 严苛鉴权：只有系统内置的 Admin(1) 或 Mod(4) 才能执行站务警告
   bool get _canWarnUser {
     if (_currentUser == null) return false;
     return _currentUser!.groups.any((g) => g.id == '1' || g.id == '3' || g.id == '4');
@@ -157,17 +155,23 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                       }
                     } on DioException catch (e) {
                       if (mounted) {
-                         // 将服务端的深层原因抛出
-                         String errMsg = '打赏阻断：余额不足或不支持该动作';
+                         // [极度坦诚：向您展示服务端真实的拦截原因，不再做无用的猜测掩盖]
+                         String errMsg = '接口拒绝打赏';
                          try {
-                           final errs = e.response?.data['errors'];
-                           if (errs != null && errs is List && errs.isNotEmpty && errs[0]['detail'] != null) {
-                             errMsg = errs[0]['detail'];
+                           final rawData = e.response?.data;
+                           if (rawData != null && rawData is Map) {
+                             if (rawData['errors'] != null && rawData['errors'] is List && rawData['errors'].isNotEmpty) {
+                               errMsg = rawData['errors'][0]['detail'] ?? errMsg;
+                             } else {
+                               errMsg = '服务端报回异常格式: ${rawData.toString()}';
+                             }
                            }
                          } catch (_) {}
-                         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg)));
+                         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg), duration: const Duration(seconds: 4)));
                          Navigator.pop(context); 
                       }
+                    } finally {
+                      if (mounted) setStateDialog(() => isSubmitting = false);
                     }
                   },
                   child: isSubmitting ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('确认打赏'),
@@ -518,10 +522,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                       const PopupMenuItem<String>(value: 'vote', child: Row(children: [Icon(Icons.how_to_vote_outlined, size: 18, color: Colors.blueAccent), SizedBox(width: 8), Text('互动详情')])),
                       
                       if (canEdit) const PopupMenuItem<String>(value: 'edit', child: Row(children: [Icon(Icons.edit_outlined, size: 18), SizedBox(width: 8), Text('编辑本帖')])),
-                      
-                      // [核心修复图2：权限不足绝不显示，仅供管理员和版主下发警告！]
                       if (_canWarnUser) const PopupMenuItem<String>(value: 'warn', child: Row(children: [Icon(Icons.info_outline, size: 18, color: Colors.redAccent), SizedBox(width: 8), Text('下发警告')])),
-                      
                       if (canDelete) const PopupMenuDivider(),
                       if (canDelete) const PopupMenuItem<String>(value: 'delete', child: Row(children: [Icon(Icons.delete_outline, size: 18, color: Colors.red), SizedBox(width: 8), Text('删除', style: TextStyle(color: Colors.red))])),
                     ],
