@@ -110,7 +110,7 @@ class _EditorPageState extends State<EditorPage> {
       try {
         final errs = e.response?.data['errors'];
         if (errs != null && errs is List && errs.isNotEmpty && errs[0]['detail'] != null) {
-          errMsg = errs[0]['detail']; // 将真实的错误原因直接反馈在 UI 上
+          errMsg = errs[0]['detail']; 
         }
       } catch (_) {}
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg)));
@@ -155,7 +155,6 @@ class _EditorPageState extends State<EditorPage> {
     }
   }
 
-  // [深度暴露：将服务器的上传报错赤裸裸地呈现出来]
   Future<void> _uploadLogic(String path, String fileName, bool isImage) async {
     setState(() => _isUploading = true);
     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('正在执行上传...')));
@@ -191,18 +190,11 @@ class _EditorPageState extends State<EditorPage> {
     setState(() {
       if (isSelected) {
         _selectedTags.add(tag);
+        // [严格修复：完全按照官方格式进行 Cash 模版的排版呈现]
         if (tag.slug.toLowerCase().contains('cash') || tag.name.contains('Cash') || tag.name.contains('收费')) {
            if (!_contentController.text.contains('提现申请核验单')) {
-              _contentController.text += '''
-💸 提现申请核验单
-*请仔细核对以下信息，防刷单核对用。*
-
-- **提现金额 (XSD): ** [填写纯数字，最低100]
-- **收款方式: ** [填写方式，如支付宝、微信]
-- **收款账号: ** [填写完整账号]
-- **真实姓名: ** [填写您的真实姓名]
-''';
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已自动拉取模板')));
+              _contentController.text += '\n💸 提现申请核验单\n*请仔细核对以下信息，防刷单核对用。*\n\n- **提现金额 (XSD): ** [填写纯数字，最低100]\n- **收款方式: ** [填写方式，如支付宝、微信]\n- **收款账号: ** [填写完整账号]\n- **真实姓名: ** [填写您的真实姓名]\n';
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已自动拉取提现模板')));
            }
         }
       } else {
@@ -277,7 +269,8 @@ class _EditorPageState extends State<EditorPage> {
               TextButton.icon(
                 icon: const Icon(Icons.lock_outline, size: 18, color: Colors.orange),
                 label: const Text('付费阅读', style: TextStyle(color: Colors.orange)),
-                onPressed: () => _insertMarkdown('[charge=10]\n在这里输入付费隐藏内容...\n', '[/charge]'),
+                // [核心修复：还原 Flarum 真实的付费查询语法！]
+                onPressed: () => _insertMarkdown('[pay amount=1 id=0]id为空或0将创建新的付费阅读，不修改原有的id则已经付费的用户可继续阅读', '[\/pay]'),
               ),
             ],
           ),
