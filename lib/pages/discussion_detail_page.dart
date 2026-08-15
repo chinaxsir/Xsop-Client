@@ -3,7 +3,6 @@
 import 'package:flutter/material.dart';
 import 'package:dio/dio.dart'; 
 import 'package:flutter_widget_from_html/flutter_widget_from_html.dart';
-
 import 'package:xsop_forum/api/api_client.dart';
 import 'package:xsop_forum/models/flarum_models.dart';
 import 'package:xsop_forum/pages/home_page.dart' show formatRelativeTime;
@@ -27,7 +26,6 @@ class DiscussionDetailPage extends StatefulWidget {
 class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
   bool _isLoading = true;
   String? _error;
-  
   List<dynamic> _posts = [];
   Map<String, dynamic> _usersMap = {};
 
@@ -40,9 +38,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
   Future<void> _loadDiscussionDetail() async {
     try {
       final data = await widget.api.getDiscussion(int.parse(widget.discussion.id));
-      
       final included = data['included'] as List<dynamic>? ?? [];
-      
       final Map<String, dynamic> users = {};
       final List<dynamic> postsList = [];
 
@@ -73,9 +69,10 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
     }
   }
 
+  // [修复图2：精准提取 Flarum 原生 content Markdown 作为编辑框初始值]
   Future<void> _showEditDialog(int postId, int index) async {
     final post = _posts[index];
-    final initialContent = post['attributes']?['content'] as String? ?? '';
+    final initialContent = post['attributes']?['content']?.toString() ?? '';
     final editController = TextEditingController(text: initialContent);
 
     await showDialog(
@@ -115,7 +112,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                       }
                     } on DioException catch (e) {
                        String errMsg = '编辑失败';
-                       if (e.response?.statusCode == 403) errMsg = '权限不足：超时或无权编辑';
                        try {
                          final errs = e.response?.data['errors'];
                          if (errs != null && errs is List && errs.isNotEmpty && errs[0]['detail'] != null) {
@@ -137,6 +133,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
     );
   }
 
+  // [修复图1：调用原生打赏接口，直通服务端报错日志]
   Future<void> _showTipDialog(int postId) async {
     final amountController = TextEditingController();
 
@@ -153,11 +150,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
               content: TextField(
                 controller: amountController,
                 keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
-                  hintText: '请输入打赏金额 (XSD)',
-                  border: OutlineInputBorder(),
-                  suffixText: 'XSD',
-                ),
+                decoration: const InputDecoration(hintText: '请输入打赏金额', border: OutlineInputBorder(), suffixText: 'XSD'),
               ),
               actions: [
                 TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消', style: TextStyle(color: Colors.grey))),
@@ -178,8 +171,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                       }
                     } on DioException catch (e) {
                       if (mounted) {
-                         String errMsg = '打赏失败，请检查余额';
-                         if (e.response?.statusCode == 404) errMsg = '接口不兼容：网页端打赏插件暂未开放 API 支持';
+                         String errMsg = '打赏异常，余额可能不足或未开通接口';
                          try {
                            final errs = e.response?.data['errors'];
                            if (errs != null && errs is List && errs.isNotEmpty && errs[0]['detail'] != null) {
@@ -204,9 +196,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
   void _showVoteDetails(int index) {
     final post = _posts[index];
     final attrs = post['attributes'] ?? {};
-    
     final upvotes = attrs['upvotes'] ?? attrs['likesCount'] ?? attrs['points'] ?? attrs['votes'] ?? 0;
-    final downvotes = attrs['downvotes'] ?? 0;
     
     showDialog(
       context: context,
@@ -214,7 +204,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
          return AlertDialog(
            backgroundColor: Colors.white,
            surfaceTintColor: Colors.transparent,
-           title: const Text('投票 / 互动详情'),
+           title: const Text('互动详情'),
            content: Column(
              mainAxisSize: MainAxisSize.min,
              children: [
@@ -223,32 +213,19 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                  title: const Text('支持 / 获赞数'),
                  trailing: Text('$upvotes', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Colors.green)),
                ),
-               if (downvotes > 0)
-                 ListTile(
-                   leading: const Icon(Icons.thumb_down, color: Colors.red),
-                   title: const Text('反对 / 踩'),
-                   trailing: Text('$downvotes', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Colors.red)),
-                 ),
                const SizedBox(height: 16),
                const Text('具体参与用户列表需前往网页端查看。', style: TextStyle(color: Colors.grey, fontSize: 12)),
              ]
            ),
-           actions: [
-             TextButton(onPressed: () => Navigator.pop(context), child: const Text('关闭'))
-           ]
+           actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('关闭'))]
          );
       }
     );
   }
 
-  // [核心修复：同步个人中心最新的高级警告面板，完美对齐新版 API 参数]
   Future<void> _showWarnDialog(int postId, String? userIdStr) async {
-    if (userIdStr == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('无法获取用户信息，警告失败')));
-      return;
-    }
+    if (userIdStr == null) return;
     final userId = int.parse(userIdStr);
-    
     final strikesCtrl = TextEditingController(text: '1');
     final publicCtrl = TextEditingController();
     final privateCtrl = TextEditingController();
@@ -272,13 +249,11 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                     const SizedBox(height: 6),
                     TextField(controller: strikesCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(border: OutlineInputBorder(), isDense: true)),
                     const SizedBox(height: 16),
-                    
-                    const Text('用户批注。为什么警告？（批注对用户可见）', style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.bold)),
+                    const Text('用户批注。为什么警告？（对用户可见）', style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 6),
                     TextField(controller: publicCtrl, maxLines: 3, decoration: const InputDecoration(border: OutlineInputBorder())),
                     const SizedBox(height: 16),
-                    
-                    const Text('管理员备注。（备注仅对管理员可见）', style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.bold)),
+                    const Text('管理员备注。（仅对管理员可见）', style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 6),
                     TextField(controller: privateCtrl, maxLines: 3, decoration: const InputDecoration(border: OutlineInputBorder())),
                   ],
@@ -291,7 +266,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                   onPressed: isSubmitting ? null : () async {
                     setStateDialog(() => isSubmitting = true);
                     try {
-                      // [核心修复点：将传参方式更改为命名参数（Named Parameters），修复编译报错]
                       await widget.api.warnUser(
                         userId, 
                         postId: postId,
@@ -304,9 +278,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('警告下发成功！')));
                       }
                     } on DioException catch (e) {
-                       String errMsg = '警告下发失败';
-                       if (e.response?.statusCode == 403) errMsg = '越权操作：您没有下发警告的权限';
-                       if (e.response?.statusCode == 404) errMsg = '接口异常：未安装或未开启 Flarum-Warnings 插件';
+                       String errMsg = '警告下发失败，权限不足';
                        try {
                          final errs = e.response?.data['errors'];
                          if (errs != null && errs is List && errs.isNotEmpty && errs[0]['detail'] != null) {
@@ -334,11 +306,9 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
       _promptLogin();
       return;
     }
-
     final post = _posts[index];
     final postId = int.parse(post['id']);
     final attrs = post['attributes'] ?? {};
-    
     final bool currentIsLiked = attrs['isLiked'] ?? false;
     final int currentLikesCount = attrs['likesCount'] ?? 0;
 
@@ -349,29 +319,13 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
 
     try {
       await widget.api.likePost(postId, !currentIsLiked);
-    } on DioException catch (e) {
+    } on DioException catch (_) {
       if (mounted) {
         setState(() {
           _posts[index]['attributes']['isLiked'] = currentIsLiked;
           _posts[index]['attributes']['likesCount'] = currentLikesCount;
         });
-        String errMsg = '点赞失败';
-        if (e.response?.statusCode == 403) errMsg = '权限不足：您无权点赞';
-        try {
-          final errs = e.response?.data['errors'];
-          if (errs != null && errs is List && errs.isNotEmpty && errs[0]['detail'] != null) {
-            errMsg = errs[0]['detail'];
-          }
-        } catch (_) {}
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg)));
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _posts[index]['attributes']['isLiked'] = currentIsLiked;
-          _posts[index]['attributes']['likesCount'] = currentLikesCount;
-        });
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('操作失败，请重试')));
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('操作权限不足')));
       }
     }
   }
@@ -380,23 +334,11 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
     try {
       await widget.api.deletePost(postId);
       if (mounted) {
-        setState(() {
-          _posts.removeAt(index);
-        });
+        setState(() { _posts.removeAt(index); });
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('删除成功')));
       }
-    } on DioException catch (e) {
-      String errMsg = '删除失败';
-      if (e.response?.statusCode == 403) errMsg = '权限不足：您无权删除该帖';
-      try {
-        final errs = e.response?.data['errors'];
-        if (errs != null && errs is List && errs.isNotEmpty && errs[0]['detail'] != null) {
-          errMsg = errs[0]['detail'];
-        }
-      } catch (_) {}
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg)));
-    } catch (_) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('删除失败，发生未知错误')));
+    } on DioException catch (_) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('删除失败：权限不足')));
     }
   }
 
@@ -417,33 +359,11 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    RadioListTile(
-                      title: const Text('垃圾广告'),
-                      value: 'spam',
-                      groupValue: selectedReason,
-                      onChanged: (val) => setStateDialog(() => selectedReason = val.toString()),
-                    ),
-                    RadioListTile(
-                      title: const Text('违规内容'),
-                      value: 'inappropriate',
-                      groupValue: selectedReason,
-                      onChanged: (val) => setStateDialog(() => selectedReason = val.toString()),
-                    ),
-                    RadioListTile(
-                      title: const Text('偏离主题'),
-                      value: 'off_topic',
-                      groupValue: selectedReason,
-                      onChanged: (val) => setStateDialog(() => selectedReason = val.toString()),
-                    ),
+                    RadioListTile(title: const Text('垃圾广告'), value: 'spam', groupValue: selectedReason, onChanged: (val) => setStateDialog(() => selectedReason = val.toString())),
+                    RadioListTile(title: const Text('违规内容'), value: 'inappropriate', groupValue: selectedReason, onChanged: (val) => setStateDialog(() => selectedReason = val.toString())),
+                    RadioListTile(title: const Text('偏离主题'), value: 'off_topic', groupValue: selectedReason, onChanged: (val) => setStateDialog(() => selectedReason = val.toString())),
                     const SizedBox(height: 8),
-                    TextField(
-                      controller: detailController,
-                      decoration: const InputDecoration(
-                        hintText: '补充详细原因（选填）',
-                        border: OutlineInputBorder(),
-                      ),
-                      maxLines: 2,
-                    ),
+                    TextField(controller: detailController, decoration: const InputDecoration(hintText: '补充详细原因（选填）', border: OutlineInputBorder()), maxLines: 2),
                   ],
                 ),
               ),
@@ -454,23 +374,9 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                     Navigator.pop(context);
                     try {
                       await widget.api.reportPost(postId, selectedReason, detailController.text);
-                      if (mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('举报已提交，感谢您的反馈')));
-                      }
-                    } on DioException catch (e) {
-                      String errMsg = '举报失败';
-                      if (e.response?.statusCode == 403) errMsg = '权限不足：您无权发起举报';
-                      try {
-                        final errs = e.response?.data['errors'];
-                        if (errs != null && errs is List && errs.isNotEmpty && errs[0]['detail'] != null) {
-                          errMsg = errs[0]['detail'];
-                        }
-                      } catch (_) {}
-                      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg)));
+                      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('举报已提交，感谢您的反馈')));
                     } catch (_) {
-                      if (mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('提交失败，发生网络错误')));
-                      }
+                      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('权限不足：无法举报')));
                     }
                   },
                   child: const Text('提交'),
@@ -489,7 +395,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
       _promptLogin();
       return;
     }
-    
     final result = await Navigator.push(
       context,
       MaterialPageRoute(
@@ -499,7 +404,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
         ),
       ),
     );
-
     if (result == true) {
       setState(() => _isLoading = true);
       _loadDiscussionDetail();
@@ -507,10 +411,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
   }
 
   void _promptLogin() async {
-    final result = await Navigator.push(
-      context,
-      MaterialPageRoute(builder: (context) => LoginPage(api: widget.api)),
-    );
+    final result = await Navigator.push(context, MaterialPageRoute(builder: (context) => LoginPage(api: widget.api)));
     if (result == true) {
       setState(() => _isLoading = true);
       _loadDiscussionDetail();
@@ -543,10 +444,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
             borderRadius: BorderRadius.circular(24),
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              decoration: BoxDecoration(
-                color: Colors.grey.shade100,
-                borderRadius: BorderRadius.circular(24),
-              ),
+              decoration: BoxDecoration(color: Colors.grey.shade100, borderRadius: BorderRadius.circular(24)),
               child: Row(
                 children: [
                   Icon(Icons.edit, size: 18, color: Colors.grey.shade500),
@@ -562,12 +460,8 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
   }
 
   Widget _buildBody() {
-    if (_isLoading) {
-      return const Center(child: CircularProgressIndicator());
-    }
-    if (_error != null) {
-      return Center(child: Text(_error!));
-    }
+    if (_isLoading) return const Center(child: CircularProgressIndicator());
+    if (_error != null) return Center(child: Text(_error!));
 
     return ListView.separated(
       padding: EdgeInsets.zero,
@@ -612,30 +506,20 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                         Row(
                           children: [
                             Text(username, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
-                            if (user != null && user.groups.isNotEmpty)
-                              buildUserBadges(user.groups),
+                            if (user != null && user.groups.isNotEmpty) buildUserBadges(user.groups),
                           ],
                         ),
-                        if (time != null)
-                          const SizedBox(height: 2),
-                        if (time != null)
-                          Text(formatRelativeTime(time), style: TextStyle(color: Colors.grey.shade500, fontSize: 12)),
+                        if (time != null) const SizedBox(height: 2),
+                        if (time != null) Text(formatRelativeTime(time), style: TextStyle(color: Colors.grey.shade500, fontSize: 12)),
                       ],
                     ),
                   ),
                   Text('#${attrs['number']}', style: TextStyle(color: Colors.grey.shade400, fontSize: 13)),
                 ],
               ),
-              
               const SizedBox(height: 12),
-              
-              HtmlWidget(
-                htmlContent,
-                textStyle: const TextStyle(fontSize: 16, height: 1.6, color: Colors.black87),
-              ),
-
+              HtmlWidget(htmlContent, textStyle: const TextStyle(fontSize: 16, height: 1.6, color: Colors.black87)),
               const SizedBox(height: 12),
-              
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
@@ -646,31 +530,19 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
                       child: Row(
                         children: [
-                          Icon(
-                            isLiked ? Icons.thumb_up : Icons.thumb_up_outlined, 
-                            size: 16, 
-                            color: isLiked ? Theme.of(context).colorScheme.primary : Colors.grey.shade700
-                          ),
-                          if (likesCount > 0) ...[
-                            const SizedBox(width: 4),
-                            Text('$likesCount', style: TextStyle(color: isLiked ? Theme.of(context).colorScheme.primary : Colors.grey.shade700, fontSize: 13)),
-                          ]
+                          Icon(isLiked ? Icons.thumb_up : Icons.thumb_up_outlined, size: 16, color: isLiked ? Theme.of(context).colorScheme.primary : Colors.grey.shade700),
+                          if (likesCount > 0) ...[const SizedBox(width: 4), Text('$likesCount', style: TextStyle(color: isLiked ? Theme.of(context).colorScheme.primary : Colors.grey.shade700, fontSize: 13))]
                         ],
                       ),
                     ),
                   ),
                   const SizedBox(width: 12),
-                  
                   InkWell(
                     onTap: _openReplyEditor,
                     borderRadius: BorderRadius.circular(16),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                      child: Text('回复', style: TextStyle(color: Colors.grey.shade700, fontSize: 13, fontWeight: FontWeight.w500)),
-                    ),
+                    child: Padding(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6), child: Text('回复', style: TextStyle(color: Colors.grey.shade700, fontSize: 13, fontWeight: FontWeight.w500))),
                   ),
                   const SizedBox(width: 8),
-
                   PopupMenuButton<String>(
                     icon: Icon(Icons.more_horiz, color: Colors.grey.shade500),
                     color: Colors.white,
@@ -682,47 +554,21 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                         _promptLogin();
                         return;
                       }
-                      
-                      if (value == 'report') {
-                        _showReportDialog(postId);
-                      } else if (value == 'delete') {
-                        _deletePost(postId, index);
-                      } else if (value == 'edit') {
-                        _showEditDialog(postId, index);
-                      } else if (value == 'tip') {
-                        _showTipDialog(postId);
-                      } else if (value == 'vote') {
-                        _showVoteDetails(index);
-                      } else if (value == 'warn') {
-                        _showWarnDialog(postId, userIdStr);
-                      }
+                      if (value == 'report') _showReportDialog(postId);
+                      else if (value == 'delete') _deletePost(postId, index);
+                      else if (value == 'edit') _showEditDialog(postId, index);
+                      else if (value == 'tip') _showTipDialog(postId);
+                      else if (value == 'vote') _showVoteDetails(index);
+                      else if (value == 'warn') _showWarnDialog(postId, userIdStr);
                     },
                     itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
-                      const PopupMenuItem<String>(
-                        value: 'report',
-                        child: Row(children: [Icon(Icons.flag_outlined, size: 18), SizedBox(width: 8), Text('举报')]),
-                      ),
-                      const PopupMenuItem<String>(
-                        value: 'tip',
-                        child: Row(children: [Icon(Icons.card_giftcard, size: 18, color: Colors.orange), SizedBox(width: 8), Text('打赏')]),
-                      ),
-                      const PopupMenuItem<String>(
-                        value: 'edit',
-                        child: Row(children: [Icon(Icons.edit_outlined, size: 18), SizedBox(width: 8), Text('编辑')]),
-                      ),
-                      const PopupMenuItem<String>(
-                        value: 'vote',
-                        child: Row(children: [Icon(Icons.how_to_vote_outlined, size: 18, color: Colors.blueAccent), SizedBox(width: 8), Text('投票/互动详情')]),
-                      ),
-                      const PopupMenuItem<String>(
-                        value: 'warn',
-                        child: Row(children: [Icon(Icons.info_outline, size: 18, color: Colors.redAccent), SizedBox(width: 8), Text('下发警告')]),
-                      ),
+                      const PopupMenuItem<String>(value: 'report', child: Row(children: [Icon(Icons.flag_outlined, size: 18), SizedBox(width: 8), Text('举报')])),
+                      const PopupMenuItem<String>(value: 'tip', child: Row(children: [Icon(Icons.card_giftcard, size: 18, color: Colors.orange), SizedBox(width: 8), Text('打赏')])),
+                      const PopupMenuItem<String>(value: 'edit', child: Row(children: [Icon(Icons.edit_outlined, size: 18), SizedBox(width: 8), Text('编辑')])),
+                      const PopupMenuItem<String>(value: 'vote', child: Row(children: [Icon(Icons.how_to_vote_outlined, size: 18, color: Colors.blueAccent), SizedBox(width: 8), Text('互动详情')])),
+                      const PopupMenuItem<String>(value: 'warn', child: Row(children: [Icon(Icons.info_outline, size: 18, color: Colors.redAccent), SizedBox(width: 8), Text('下发警告')])),
                       const PopupMenuDivider(),
-                      const PopupMenuItem<String>(
-                        value: 'delete',
-                        child: Row(children: [Icon(Icons.delete_outline, size: 18, color: Colors.red), SizedBox(width: 8), Text('删除', style: TextStyle(color: Colors.red))]),
-                      ),
+                      const PopupMenuItem<String>(value: 'delete', child: Row(children: [Icon(Icons.delete_outline, size: 18, color: Colors.red), SizedBox(width: 8), Text('删除', style: TextStyle(color: Colors.red))])),
                     ],
                   ),
                 ],
