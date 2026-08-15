@@ -38,21 +38,60 @@ class _UserActivityPageState extends State<UserActivityPage> {
     _loadData();
   }
 
-  // [深刻修复点：优雅降级探针]
-  // 很多第三方插件不允许强加 includes，一旦被拦截直接返回无 include 的纯净版即可，坚决不要报错死循环
-  Future<Map<String, dynamic>> _fetchGracefully(String endpoint, Map<String, dynamic> query, String includes) async {
-    try {
-      final q = Map<String, dynamic>.from(query);
-      q['include'] = includes;
-      return await widget.api.getDynamicList(endpoint, queryParameters: q);
-    } catch (e) {
-      if (e is DioException && (e.response?.statusCode == 400 || e.response?.statusCode == 500)) {
+  // [无畏降级探针] 先带 include 请求，遇到服务器 400（比如不兼容的插件结构）自动去掉 include 进行纯净版保底请求
+  Future<void> _aggressiveFetch(List<String> endpoints, String includes) async {
+    List<dynamic> allData = [];
+    List<dynamic> allIncluded = [];
+    final uid = widget.user.id;
+    
+    // Flarum 插件极度分裂，我们要照顾到 filter[user], filter[recipient] 甚至是 /api/users/{id} 节点
+    final queries = [
+      {'filter[user]': uid, 'include': includes},
+      {'filter[recipient]': uid, 'include': includes},
+      {'filter[sender]': uid, 'include': includes},
+      {'include': includes} 
+    ];
+
+    for (final ep in endpoints) {
+      for (final q in queries) {
         try {
-          return await widget.api.getDynamicList(endpoint, queryParameters: query); // 去掉 include 保底重试
+          final res = await widget.api.getDynamicList(ep, queryParameters: q);
+          allData.addAll(res['data'] ?? []);
+          allIncluded.addAll(res['included'] ?? []);
+        } catch (_) {}
+        
+        // 保底措施：不带 include（避免 400 Bad Request）
+        try {
+          final qNoInclude = Map<String, dynamic>.from(q)..remove('include');
+          final res = await widget.api.getDynamicList(ep, queryParameters: qNoInclude);
+          allData.addAll(res['data'] ?? []);
+          allIncluded.addAll(res['included'] ?? []);
         } catch (_) {}
       }
-      return {'data': []}; 
     }
+    
+    final Map<String, dynamic> uniqueData = {};
+    for (var item in allData) {
+      if (item != null && item['id'] != null) uniqueData[item['id'].toString()] = item;
+    }
+    
+    final Map<String, dynamic> uniqueIncluded = {};
+    for (var item in allIncluded) {
+      if (item != null && item['id'] != null && item['type'] != null) {
+        uniqueIncluded['${item['type']}_${item['id']}'] = item;
+      }
+    }
+
+    _included = uniqueIncluded.values.toList();
+    _items = uniqueData.values.toList();
+    
+    _items.sort((a, b) {
+      final timeA = a['attributes']?['createdAt'];
+      final timeB = b['attributes']?['createdAt'];
+      if (timeA == null) return 1;
+      if (timeB == null) return -1;
+      return DateTime.parse(timeB).compareTo(DateTime.parse(timeA));
+    });
   }
 
   Future<void> _loadData() async {
@@ -62,46 +101,35 @@ class _UserActivityPageState extends State<UserActivityPage> {
         final res = await widget.api.getDynamicList('/api/discussions', queryParameters: {'filter[q]': 'author:${widget.user.username}'});
         _items = res['data'] ?? [];
         _included = res['included'] ?? [];
-        _customEmptyMessage = '未发布任何主题。';
+        _customEmptyMessage = '该账号暂未发布任何主题。';
       } else if (widget.activityType == 'posts') {
-        final res = await widget.api.getDynamicList('/api/posts', queryParameters: {'filter[user]': widget.user.id, 'include': 'discussion'});
-        final rawPosts = res['data'] as List<dynamic>? ?? [];
-        
-        // [修复图1核心串号 Bug] 强制本地再次清洗比对 userId，绝对保证是当前查看的账户！
-        _items = rawPosts.where((p) {
-          final uId = p['relationships']?['user']?['data']?['id']?.toString();
-          return uId == widget.user.id;
-        }).toList();
-        
-        _included = res['included'] ?? [];
-        _customEmptyMessage = '无回复记录。';
+        // [极度安全的回复提取机制：加上 filter[type]=comment 过滤干扰项目]
+        try {
+          final res = await widget.api.getDynamicList('/api/posts', queryParameters: {
+            'filter[user]': widget.user.id, 
+            'filter[type]': 'comment', 
+            'include': 'discussion'
+          });
+          _items = res['data'] ?? [];
+          _included = res['included'] ?? [];
+        } catch (_) {
+          // 保底纯净抓取
+          final res = await widget.api.getDynamicList('/api/posts', queryParameters: {
+            'filter[user]': widget.user.id,
+            'filter[type]': 'comment',
+          });
+          _items = res['data'] ?? [];
+          _included = res['included'] ?? [];
+        }
+        _customEmptyMessage = '暂无回复记录。';
       } else if (widget.activityType == 'warnings') {
-        final res = await _fetchGracefully('/api/warnings', {'filter[user]': widget.user.id}, 'addedByUser,post');
-        _items = res['data'] ?? [];
-        _included = res['included'] ?? [];
-        _customEmptyMessage = '暂无站务警告记录。';
+        // [图4/图5 修复点：将 Flarum Warn 的用户专属隐藏节点一起丢进去扒数据]
+        await _aggressiveFetch(['/api/warnings', '/api/user-warnings', '/api/users/${widget.user.id}/warnings'], 'addedByUser,post,post.discussion');
+        _customEmptyMessage = '暂无任何站务违规记录。';
       } else if (widget.activityType == 'tips') {
-        final r1 = await _fetchGracefully('/api/tips', {'filter[user]': widget.user.id}, 'sender,recipient,post');
-        final r2 = await _fetchGracefully('/api/moneyHistory', {'filter[user]': widget.user.id}, '');
-        
-        List<dynamic> combined = [];
-        combined.addAll(r1['data'] ?? []);
-        combined.addAll(r2['data'] ?? []);
-        
-        _included.addAll(r1['included'] ?? []);
-        _included.addAll(r2['included'] ?? []);
-        _items = combined;
-        _customEmptyMessage = '暂无打赏流水。';
-      }
-
-      if (_items.isNotEmpty) {
-        _items.sort((a, b) {
-          final timeA = a['attributes']?['createdAt'];
-          final timeB = b['attributes']?['createdAt'];
-          if (timeA == null) return 1;
-          if (timeB == null) return -1;
-          return DateTime.parse(timeB).compareTo(DateTime.parse(timeA));
-        });
+        // 同理覆盖打赏的所有可能路径
+        await _aggressiveFetch(['/api/tips', '/api/rewards', '/api/moneyHistory', '/api/money-transfers', '/api/transactions', '/api/users/${widget.user.id}/tips'], 'sender,recipient,post,post.discussion');
+        _customEmptyMessage = '暂无打赏或财富流通流水。';
       }
 
       if (mounted) setState(() => _isLoading = false);
@@ -112,15 +140,15 @@ class _UserActivityPageState extends State<UserActivityPage> {
           if (e.response?.statusCode == 404) {
              _items = []; _error = null; 
           } else if (e.response?.statusCode == 403) {
-             _error = '权限不足：无法查阅该数据流。';
+             _error = '服务器拦截：无权查看这些数据。';
           } else {
-             _error = '网络不佳，加载异常。';
+             _error = '网络传输发生故障。';
           }
           _isLoading = false;
         });
       }
     } catch (e) {
-      if (mounted) setState(() { _error = '本地引擎解析异常。'; _isLoading = false; });
+      if (mounted) setState(() { _error = '发生数据渲染层错误。'; _isLoading = false; });
     }
   }
 
@@ -162,14 +190,7 @@ class _UserActivityPageState extends State<UserActivityPage> {
             const SizedBox(height: 16),
             Text(_error!, style: TextStyle(color: Colors.grey.shade500, fontSize: 14)),
             const SizedBox(height: 16),
-            FilledButton.tonal(
-              onPressed: () async {
-                 setState(() { _isLoading = true; _error = null; });
-                 await Future.delayed(const Duration(milliseconds: 400));
-                 _loadData();
-              }, 
-              child: const Text('重试')
-            ),
+            FilledButton.tonal(onPressed: _loadData, child: const Text('重新加载')),
           ],
         ),
       );
@@ -218,12 +239,12 @@ class _UserActivityPageState extends State<UserActivityPage> {
     final attrs = item['attributes'] ?? {};
     final addedByUserId = item['relationships']?['addedByUser']?['data']?['id']?.toString();
     final addedByUser = _getIncluded('users', addedByUserId);
-    final adminName = addedByUser?['attributes']?['displayName'] ?? addedByUser?['attributes']?['username'] ?? '系统管理员';
+    final adminName = addedByUser?['attributes']?['displayName'] ?? addedByUser?['attributes']?['username'] ?? '管理员';
 
     final strikes = attrs['strikes'] ?? 0;
-    final comment = attrs['publicComment'] ?? attrs['reason'] ?? '违规操作。';
+    final comment = attrs['publicComment'] ?? attrs['reason'] ?? '违反社区发帖规范。';
     final timeStr = attrs['createdAt'];
-    final timeDisplay = timeStr != null ? formatRelativeTime(DateTime.parse(timeStr)) : '时间缺失';
+    final timeDisplay = timeStr != null ? formatRelativeTime(DateTime.parse(timeStr)) : '时间丢失';
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16),
@@ -236,13 +257,13 @@ class _UserActivityPageState extends State<UserActivityPage> {
             children: [
               Icon(Icons.warning, color: Colors.red.shade400, size: 18),
               const SizedBox(width: 8),
-              Text('站务警告：记 $strikes 分', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+              Text('警告记 $strikes 分', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
             ],
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 12),
           Text(comment, style: const TextStyle(color: Colors.black87, fontSize: 14)),
           const SizedBox(height: 12),
-          Text('由 $adminName 下发于 $timeDisplay', style: TextStyle(color: Colors.grey.shade500, fontSize: 12)),
+          Text('处理人：$adminName  |  归档时间：$timeDisplay', style: TextStyle(color: Colors.grey.shade500, fontSize: 12)),
         ],
       ),
     );
@@ -256,16 +277,16 @@ class _UserActivityPageState extends State<UserActivityPage> {
 
     final senderId = item['relationships']?['sender']?['data']?['id']?.toString() ?? attrs['senderId']?.toString();
     final sender = _getIncluded('users', senderId);
-    final senderName = sender?['attributes']?['displayName'] ?? sender?['attributes']?['username'] ?? '账户';
+    final senderName = sender?['attributes']?['displayName'] ?? sender?['attributes']?['username'] ?? '某位用户';
 
     final recipientId = item['relationships']?['recipient']?['data']?['id']?.toString() ?? attrs['recipientId']?.toString();
     final recipient = _getIncluded('users', recipientId);
-    final recipientName = recipient?['attributes']?['displayName'] ?? recipient?['attributes']?['username'] ?? '账户';
+    final recipientName = recipient?['attributes']?['displayName'] ?? recipient?['attributes']?['username'] ?? '接收人';
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16),
       padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(color: Colors.white, border: Border.all(color: Colors.blue.shade200), borderRadius: BorderRadius.circular(8)),
+      decoration: BoxDecoration(color: Colors.white, border: Border.all(color: Colors.blue.shade100), borderRadius: BorderRadius.circular(8)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -273,77 +294,86 @@ class _UserActivityPageState extends State<UserActivityPage> {
             children: [
               const Icon(Icons.card_giftcard, size: 18, color: Colors.blue),
               const SizedBox(width: 8),
-              Text('打赏 $amount XSD', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+              Text('打赏流水 ($amount XSD)', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
             ],
           ),
-          const SizedBox(height: 8),
-          Text('记录：$senderName 给 $recipientName', style: const TextStyle(color: Colors.black87, fontSize: 14)),
           const SizedBox(height: 12),
-          Text('生成于 $timeDisplay', style: TextStyle(color: Colors.grey.shade500, fontSize: 12)),
+          Text('记录：$senderName  →  $recipientName', style: const TextStyle(color: Colors.black87, fontSize: 14)),
+          const SizedBox(height: 12),
+          Text('结算时间：$timeDisplay', style: TextStyle(color: Colors.grey.shade500, fontSize: 12)),
         ],
       ),
     );
   }
 
-  // [深刻修复：绝对不显示蓝框废话文本，仅留红色边框，完美对齐图6！]
   Widget _buildPostItem(Map<String, dynamic> item) {
     final attrs = item['attributes'] ?? {};
     final timeStr = attrs['createdAt'];
     final timeDisplay = timeStr != null ? formatRelativeTime(DateTime.parse(timeStr)) : '';
 
-    String discussionTitle = '未知主题';
+    String discussionTitle = '原始帖子未找到';
     final discussionId = attrs['discussionId']?.toString() ?? item['relationships']?['discussion']?['data']?['id']?.toString();
     if (discussionId != null) {
       final dNode = _getIncluded('discussions', discussionId);
-      if (dNode != null) discussionTitle = dNode['attributes']?['title'] ?? '未知主题';
+      if (dNode != null) discussionTitle = dNode['attributes']?['title'] ?? '原始帖子未找到';
     }
 
-    return InkWell(
-      onTap: () {
-        if (discussionId != null) {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (context) => DiscussionDetailPage(
-                api: widget.api,
-                discussion: Discussion(
-                  id: discussionId, 
-                  title: discussionTitle,
-                  commentCount: 0, 
-                  createdAt: timeStr != null ? DateTime.tryParse(timeStr) ?? DateTime.now() : DateTime.now(),
-                  tags: const [], 
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 8, offset: const Offset(0, 2))],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          InkWell(
+            onTap: () {
+              if (discussionId != null) {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => DiscussionDetailPage(
+                      api: widget.api,
+                      discussion: Discussion(
+                        id: discussionId, 
+                        title: discussionTitle,
+                        commentCount: 0, 
+                        createdAt: timeStr != null ? DateTime.tryParse(timeStr) ?? DateTime.now() : DateTime.now(),
+                        tags: const [], 
+                      ),
+                    ),
+                  ),
+                );
+              }
+            },
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: BoxDecoration(
+                color: Colors.red.shade50.withOpacity(0.3),
+                border: Border.all(color: Colors.red.shade100, width: 1.5),
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
+              ),
+              child: Text.rich(
+                TextSpan(
+                  children: [
+                    const TextSpan(text: '在「', style: TextStyle(color: Colors.black87, fontWeight: FontWeight.w500)),
+                    TextSpan(text: discussionTitle, style: const TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.w600)),
+                    const TextSpan(text: '」主题中的回复', style: TextStyle(color: Colors.black87, fontWeight: FontWeight.w500)),
+                  ],
                 ),
+                style: const TextStyle(fontSize: 14),
               ),
             ),
-          );
-        }
-      },
-      child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 16),
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-        decoration: BoxDecoration(
-          color: Colors.white, // 取消底色，保留白板
-          border: Border.all(color: Colors.red.shade100, width: 2), // 纯红框要求
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text.rich(
-              TextSpan(
-                children: [
-                  const TextSpan(text: '在「', style: TextStyle(color: Colors.black87, fontWeight: FontWeight.w500)),
-                  TextSpan(text: discussionTitle, style: const TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.w600)),
-                  const TextSpan(text: '」主题中的回复', style: TextStyle(color: Colors.black87, fontWeight: FontWeight.w500)),
-                ],
-              ),
-              style: const TextStyle(fontSize: 15, height: 1.4),
-            ),
-            const SizedBox(height: 8),
-            Text('回复于 $timeDisplay (点击可跳转)', style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
-          ],
-        ),
+          ),
+          
+          Padding(
+            padding: const EdgeInsets.only(left: 16, right: 16, top: 12, bottom: 12),
+            child: Text('回复于 $timeDisplay (点击标题可跳转原帖)', style: TextStyle(fontSize: 12, color: Colors.grey.shade400)),
+          ),
+        ],
       ),
     );
   }
@@ -360,7 +390,7 @@ class _UserActivityPageState extends State<UserActivityPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(attrs['title'] ?? '基础日志', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Colors.black87)),
+          Text(attrs['title'] ?? '基础日志流', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Colors.black87)),
           const SizedBox(height: 8),
           Text(timeDisplay, style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
         ],
