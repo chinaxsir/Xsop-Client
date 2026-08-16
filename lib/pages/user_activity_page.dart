@@ -109,6 +109,7 @@ class _UserActivityPageState extends State<UserActivityPage> {
           final r1 = await _safeFetch(ep, {'filter[user]': uid, 'include': 'addedByUser,user,post'});
           final r2 = await _safeFetch(ep, {'filter[addedByUser]': uid, 'include': 'addedByUser,user,post'}); 
           final r3 = await _safeFetch(ep, {}); 
+          
           for(var i in [..._extractData(r1['data']), ..._extractData(r2['data']), ..._extractData(r3['data'])]) {
             if (i['id'] != null) uniqueMap[i['id'].toString()] = i;
           }
@@ -321,7 +322,7 @@ class _UserActivityPageState extends State<UserActivityPage> {
         final type = item['type'];
         
         if (widget.activityType == 'warnings') return _buildWarningItem(item);
-        if (widget.activityType == 'tips' || type == 'rewards' || type == 'post_tips' || type == 'moneyRewards') return _TipItemWidget(item: item, api: widget.api, included: _included);
+        if (widget.activityType == 'tips' || type == 'rewards' || type == 'post_tips' || type == 'moneyRewards') return _TipItemWidget(item: item, api: widget.api, included: _included, profileUser: widget.user);
         if (widget.activityType == 'moneyHistory' || type == 'user-money-histories' || type == 'money_transfers' || type == 'transactions' || type == 'moneyTransactions') return _buildMoneyItem(item);
         if (widget.activityType == 'posts') return _buildPostItem(item);
         
@@ -330,7 +331,6 @@ class _UserActivityPageState extends State<UserActivityPage> {
     );
   }
 
-  // 完全剔除了所有非官方的辞藻
   Widget _buildWarningItem(Map<String, dynamic> item) {
     final attrs = item['attributes'] ?? {};
     
@@ -344,7 +344,7 @@ class _UserActivityPageState extends State<UserActivityPage> {
     final targetName = targetUser?['attributes']?['displayName'] ?? targetUser?['attributes']?['username'] ?? '用户';
 
     final strikes = attrs['strikes'] ?? 0;
-    final comment = attrs['publicComment'] ?? attrs['reason'] ?? '警告记录。';
+    final comment = attrs['publicComment'] ?? attrs['reason'] ?? '违规操作。';
     final timeStr = attrs['createdAt']?.toString();
     
     String timeDisplay = '未知';
@@ -541,13 +541,19 @@ class _UserActivityPageState extends State<UserActivityPage> {
   }
 }
 
-// [核心修复：绝不让 "未知用户" 出现，强制发送异步网络请求去拉拉回真实的用户名！]
+// [全功能重塑的打赏渲染组件：彻底消灭“未知用户”]
 class _TipItemWidget extends StatefulWidget {
   final Map<String, dynamic> item;
   final ApiClient api;
   final List<dynamic> included;
+  final FlarumUser profileUser; // 引入个人中心的主角数据作为锚点
 
-  const _TipItemWidget({required this.item, required this.api, required this.included});
+  const _TipItemWidget({
+    required this.item, 
+    required this.api, 
+    required this.included, 
+    required this.profileUser
+  });
 
   @override
   State<_TipItemWidget> createState() => _TipItemWidgetState();
@@ -603,6 +609,7 @@ class _TipItemWidgetState extends State<_TipItemWidget> {
     }
   }
 
+  // 强大的 ID 转用户名解析器
   Future<String> _resolveUserName(String? id, String defaultName) async {
     if (id == null) return defaultName;
     
@@ -612,7 +619,7 @@ class _TipItemWidgetState extends State<_TipItemWidget> {
         return node['attributes']?['displayName'] ?? node['attributes']?['username'] ?? defaultName;
     }
     
-    // 2. 缓存没有？强制发请求去服务器拉！
+    // 2. 强制去服务器查
     try {
         final res = await widget.api.getUser(int.parse(id));
         return res['data']?['attributes']?['displayName'] ?? res['data']?['attributes']?['username'] ?? defaultName;
@@ -621,35 +628,72 @@ class _TipItemWidgetState extends State<_TipItemWidget> {
     }
   }
 
+  // [无敌推断引擎] 彻底解决 Flarum 数据缺失导致系统/未知用户的问题
   Future<void> _fetchMissingNames() async {
     final attrs = widget.item['attributes'] ?? {};
+    final rels = widget.item['relationships'] ?? {};
     
-    String? sId = widget.item['relationships']?['sender']?['data']?['id']?.toString() ?? 
-                  widget.item['relationships']?['fromUser']?['data']?['id']?.toString() ?? 
-                  attrs['senderId']?.toString() ?? 
-                  attrs['fromUserId']?.toString();
+    // 获取正在查看页面的主角 ID 和 名字
+    final String profileUid = widget.profileUser.id;
+    final String profileName = widget.profileUser.displayName.isNotEmpty ? widget.profileUser.displayName : widget.profileUser.username;
 
-    String? rId = widget.item['relationships']?['recipient']?['data']?['id']?.toString() ?? 
-                  widget.item['relationships']?['toUser']?['data']?['id']?.toString() ?? 
-                  attrs['recipientId']?.toString() ?? 
-                  attrs['toUserId']?.toString();
-                  
-    String? uId = widget.item['relationships']?['user']?['data']?['id']?.toString() ?? 
-                  attrs['userId']?.toString();
+    // 尝试提取明确给定的发送方和接收方
+    String? explicitSender = rels['sender']?['data']?['id']?.toString() ?? 
+                             rels['fromUser']?['data']?['id']?.toString() ?? 
+                             attrs['senderId']?.toString() ?? 
+                             attrs['fromUserId']?.toString();
 
-    double amountVal = double.tryParse(_amount) ?? 0.0;
+    String? explicitRecipient = rels['recipient']?['data']?['id']?.toString() ?? 
+                                rels['toUser']?['data']?['id']?.toString() ?? 
+                                attrs['recipientId']?.toString() ?? 
+                                attrs['toUserId']?.toString();
     
-    if (sId == null && rId == null && uId != null) {
-        if (amountVal > 0) {
-            rId = uId; 
-        } else if (amountVal < 0) {
-            sId = uId; 
+    String? sId = explicitSender;
+    String? rId = explicitRecipient;
+
+    // 搜刮整条记录里牵涉到的所有人（除了主角以外的人）
+    List<String> otherUsers = [];
+    rels.forEach((k, v) {
+        if (v is Map && v['data'] is Map) {
+            var d = v['data'];
+            if (d['type'] == 'users' && d['id'] != null && d['id'].toString() != profileUid) {
+                otherUsers.add(d['id'].toString());
+            }
+        } else if (v is Map && v['data'] is List) {
+            for (var e in v['data']) {
+                if (e is Map && e['type'] == 'users' && e['id'] != null && e['id'].toString() != profileUid) {
+                    otherUsers.add(e['id'].toString());
+                }
+            }
         }
+    });
+
+    // 绝杀逻辑：如果服务器连个发送人/接收人都没给
+    if (sId == null && rId == null) {
+        // 根据钱是加了还是扣了，推断谁收谁付！
+        double amt = double.tryParse(_amount.replaceAll(RegExp(r'[^0-9\.\-]'), '')) ?? 0.0;
+        if (amt < 0) {
+            sId = profileUid; // 钱少了，主角是付款人
+            rId = otherUsers.isNotEmpty ? otherUsers.first : null;
+        } else {
+            rId = profileUid; // 钱多了，主角是收款人
+            sId = otherUsers.isNotEmpty ? otherUsers.first : null;
+        }
+    } else if (sId == null && rId != null) {
+        if (rId != profileUid) sId = profileUid;
+        else sId = otherUsers.isNotEmpty ? otherUsers.first : null;
+    } else if (rId == null && sId != null) {
+        if (sId != profileUid) rId = profileUid;
+        else rId = otherUsers.isNotEmpty ? otherUsers.first : null;
     }
 
-    if (rId == null && _discussionId != null) {
-        final postId = widget.item['relationships']?['post']?['data']?['id']?.toString() ?? attrs['postId']?.toString();
-        if (postId != null) {
+    // 系统下发的补贴兜底
+    sId ??= attrs['actorId']?.toString();
+
+    // 如果还没有收款人，尝试去原帖子里找楼主！
+    if (rId == null) {
+       final postId = rels['post']?['data']?['id']?.toString() ?? attrs['postId']?.toString();
+       if (postId != null) {
             final pNode = _getIncluded('posts', postId);
             if (pNode != null) {
                 rId = pNode['relationships']?['user']?['data']?['id']?.toString();
@@ -659,11 +703,12 @@ class _TipItemWidgetState extends State<_TipItemWidget> {
                     rId = pRes['data']?['relationships']?['user']?['data']?['id']?.toString();
                 } catch (_) {}
             }
-        }
+       }
     }
 
-    String resolvedSender = await _resolveUserName(sId, '系统');
-    String resolvedRecipient = await _resolveUserName(rId, '未知用户');
+    // 最终解析名字：是主角就直接用主角名字，不是就去数据库查
+    String resolvedSender = sId == profileUid ? profileName : await _resolveUserName(sId, sId == null ? '系统' : '未知用户');
+    String resolvedRecipient = rId == profileUid ? profileName : await _resolveUserName(rId, rId == null ? '系统' : '未知用户');
 
     if (mounted) {
         setState(() {
