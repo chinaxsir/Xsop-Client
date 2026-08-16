@@ -88,16 +88,13 @@ class _UserActivityPageState extends State<UserActivityPage> {
         
         _items = uniqueMap.values.where((p) {
            final type = p['attributes']?['contentType'];
-           // 防止系统日志引发灰屏，如果是管理员等导致的特殊记录，一律剔除只留 comment
            if (type != 'comment') return false; 
            
            final relUserId = p['relationships']?['user']?['data']?['id']?.toString();
            final attrUserId = p['attributes']?['userId']?.toString();
            
-           // 防串号，不是这哥们的坚决不要
            if (relUserId != null && relUserId != uid) return false;
            if (attrUserId != null && attrUserId != uid) return false;
-           
            return true; 
         }).toList();
         
@@ -112,7 +109,6 @@ class _UserActivityPageState extends State<UserActivityPage> {
           final r1 = await _safeFetch(ep, {'filter[user]': uid, 'include': 'addedByUser,user,post'});
           final r2 = await _safeFetch(ep, {'filter[addedByUser]': uid, 'include': 'addedByUser,user,post'}); 
           final r3 = await _safeFetch(ep, {}); 
-          
           for(var i in [..._extractData(r1['data']), ..._extractData(r2['data']), ..._extractData(r3['data'])]) {
             if (i['id'] != null) uniqueMap[i['id'].toString()] = i;
           }
@@ -139,7 +135,7 @@ class _UserActivityPageState extends State<UserActivityPage> {
         }
 
         _items = uniqueMap.values.toList();
-        _customEmptyMessage = '暂无站务警告记录。';
+        _customEmptyMessage = '暂无站务警告。';
       } 
       else if (widget.activityType == 'tips') {
         final endpoints = [
@@ -151,9 +147,9 @@ class _UserActivityPageState extends State<UserActivityPage> {
         final Map<String, dynamic> uniqueMap = {};
         
         for (var ep in endpoints) {
-          final r1 = await _safeFetch(ep, {'filter[user]': uid, 'include': 'sender,recipient,post,user'});
-          final r2 = await _safeFetch(ep, {'filter[sender]': uid, 'include': 'sender,recipient,post,user'});
-          final r3 = await _safeFetch(ep, {'filter[recipient]': uid, 'include': 'sender,recipient,post,user'});
+          final r1 = await _safeFetch(ep, {'filter[user]': uid, 'include': 'sender,recipient,post'});
+          final r2 = await _safeFetch(ep, {'filter[sender]': uid, 'include': 'sender,recipient,post'});
+          final r3 = await _safeFetch(ep, {'filter[recipient]': uid, 'include': 'sender,recipient,post'});
           final r4 = await _safeFetch(ep, {}); 
           
           for(var i in [..._extractData(r1['data']), ..._extractData(r2['data']), ..._extractData(r3['data']), ..._extractData(r4['data'])]) {
@@ -184,6 +180,29 @@ class _UserActivityPageState extends State<UserActivityPage> {
 
         _items = uniqueMap.values.toList();
         _customEmptyMessage = '暂无打赏记录。';
+      }
+      else if (widget.activityType == 'money') {
+        final endpoints = ['/api/users/$uid/money-transactions', '/api/user-money-histories', '/api/moneyHistory', '/api/users/$uid/moneyHistory', '/api/money-transfers', '/api/transactions'];
+        final Map<String, dynamic> uniqueMap = {};
+        for (var ep in endpoints) {
+          final r1 = await _safeFetch(ep, {'filter[user]': uid});
+          final r2 = await _safeFetch(ep, {});
+          for(var i in [..._extractData(r1['data']), ..._extractData(r2['data'])]) {
+            if (i['id'] != null) uniqueMap[i['id'].toString()] = i;
+          }
+        }
+        
+        for (var inc in ['moneyHistory', 'userMoneyHistories', 'transactions', 'moneyTransactions']) {
+            final rUser = await _safeFetch('/api/users/$uid', {'include': inc});
+            _included.addAll(_extractData(rUser['included']));
+            for (var i in _extractData(rUser['included'])) {
+               if (i['type'] == 'moneyHistory' || i['type'] == 'user-money-histories' || i['type'] == 'transactions' || i['type'] == 'moneyTransactions') {
+                   uniqueMap[i['id'].toString()] = i;
+               }
+            }
+        }
+        _items = uniqueMap.values.toList();
+        _customEmptyMessage = '暂无资金明细。';
       }
 
       if (_items.isNotEmpty) {
@@ -264,7 +283,7 @@ class _UserActivityPageState extends State<UserActivityPage> {
                  await Future.delayed(const Duration(milliseconds: 400));
                  _loadData();
               }, 
-              child: const Text('重新加载数据')
+              child: const Text('重新加载')
             ),
           ],
         ),
@@ -303,6 +322,7 @@ class _UserActivityPageState extends State<UserActivityPage> {
         
         if (widget.activityType == 'warnings') return _buildWarningItem(item);
         if (widget.activityType == 'tips' || type == 'rewards' || type == 'post_tips' || type == 'moneyRewards') return _TipItemWidget(item: item, api: widget.api, included: _included);
+        if (widget.activityType == 'moneyHistory' || type == 'user-money-histories' || type == 'money_transfers' || type == 'transactions' || type == 'moneyTransactions') return _buildMoneyItem(item);
         if (widget.activityType == 'posts') return _buildPostItem(item);
         
         return _buildDefaultItem(item);
@@ -310,6 +330,7 @@ class _UserActivityPageState extends State<UserActivityPage> {
     );
   }
 
+  // 完全剔除了所有非官方的辞藻
   Widget _buildWarningItem(Map<String, dynamic> item) {
     final attrs = item['attributes'] ?? {};
     
@@ -323,7 +344,7 @@ class _UserActivityPageState extends State<UserActivityPage> {
     final targetName = targetUser?['attributes']?['displayName'] ?? targetUser?['attributes']?['username'] ?? '用户';
 
     final strikes = attrs['strikes'] ?? 0;
-    final comment = attrs['publicComment'] ?? attrs['reason'] ?? '违规操作。';
+    final comment = attrs['publicComment'] ?? attrs['reason'] ?? '警告记录。';
     final timeStr = attrs['createdAt']?.toString();
     
     String timeDisplay = '未知';
@@ -358,6 +379,48 @@ class _UserActivityPageState extends State<UserActivityPage> {
     );
   }
 
+  Widget _buildMoneyItem(Map<String, dynamic> item) {
+    final attrs = item['attributes'] ?? {};
+    final amount = attrs['amount']?.toString() ?? attrs['money']?.toString() ?? attrs['balance_delta']?.toString() ?? '0';
+    final desc = attrs['description']?.toString() ?? attrs['reason']?.toString() ?? attrs['source']?.toString() ?? '系统变动';
+    
+    final timeStr = attrs['createdAt']?.toString();
+    String timeDisplay = '未知';
+    if (timeStr != null) {
+      try { timeDisplay = formatRelativeTime(DateTime.parse(timeStr)); } catch (_) {}
+    }
+    
+    final isIncome = !amount.startsWith('-');
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(color: Colors.white, border: Border.all(color: Colors.green.shade200), borderRadius: BorderRadius.circular(8)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.account_balance_wallet, size: 18, color: isIncome ? Colors.green : Colors.grey.shade600),
+                  const SizedBox(width: 8),
+                  Text('资金明细', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+                ],
+              ),
+              Text('${isIncome && amount != "0" && !amount.startsWith("+") ? "+" : ""}$amount XSD', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: isIncome ? Colors.green : Colors.black87)),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text('事由：$desc', style: const TextStyle(color: Colors.black87, fontSize: 14)),
+          const SizedBox(height: 12),
+          Text('时间：$timeDisplay', style: TextStyle(color: Colors.grey.shade500, fontSize: 12)),
+        ],
+      ),
+    );
+  }
+
   Widget _buildPostItem(Map<String, dynamic> item) {
     final attrs = item['attributes'] ?? {};
     final timeStr = attrs['createdAt']?.toString();
@@ -383,7 +446,7 @@ class _UserActivityPageState extends State<UserActivityPage> {
     } else if (rawContent is String) {
       safeHtmlContent = rawContent;
     } else {
-      safeHtmlContent = '<p style="color: grey;">[当前内容已隐藏]</p>';
+      safeHtmlContent = '<p style="color: grey;">[内容已隐藏]</p>';
     }
 
     return Container(
@@ -478,7 +541,7 @@ class _UserActivityPageState extends State<UserActivityPage> {
   }
 }
 
-// [核心防御：单独分离出来的打赏渲染组件，通过 API 强制追溯真实姓名]
+// [核心修复：绝不让 "未知用户" 出现，强制发送异步网络请求去拉拉回真实的用户名！]
 class _TipItemWidget extends StatefulWidget {
   final Map<String, dynamic> item;
   final ApiClient api;
@@ -540,55 +603,74 @@ class _TipItemWidgetState extends State<_TipItemWidget> {
     }
   }
 
+  Future<String> _resolveUserName(String? id, String defaultName) async {
+    if (id == null) return defaultName;
+    
+    // 1. 本地缓存里找
+    final node = _getIncluded('users', id);
+    if (node != null) {
+        return node['attributes']?['displayName'] ?? node['attributes']?['username'] ?? defaultName;
+    }
+    
+    // 2. 缓存没有？强制发请求去服务器拉！
+    try {
+        final res = await widget.api.getUser(int.parse(id));
+        return res['data']?['attributes']?['displayName'] ?? res['data']?['attributes']?['username'] ?? defaultName;
+    } catch (_) {
+        return defaultName;
+    }
+  }
+
   Future<void> _fetchMissingNames() async {
     final attrs = widget.item['attributes'] ?? {};
     
-    final senderId = widget.item['relationships']?['sender']?['data']?['id']?.toString() ?? 
-                     widget.item['relationships']?['user']?['data']?['id']?.toString() ?? 
-                     attrs['senderId']?.toString() ?? 
-                     attrs['fromUserId']?.toString() ?? 
-                     attrs['userId']?.toString();
+    String? sId = widget.item['relationships']?['sender']?['data']?['id']?.toString() ?? 
+                  widget.item['relationships']?['fromUser']?['data']?['id']?.toString() ?? 
+                  attrs['senderId']?.toString() ?? 
+                  attrs['fromUserId']?.toString();
 
-    final recipientId = widget.item['relationships']?['recipient']?['data']?['id']?.toString() ?? 
-                        widget.item['relationships']?['post']?['data']?['user']?['id']?.toString() ?? 
-                        attrs['recipientId']?.toString() ?? 
-                        attrs['toUserId']?.toString();
+    String? rId = widget.item['relationships']?['recipient']?['data']?['id']?.toString() ?? 
+                  widget.item['relationships']?['toUser']?['data']?['id']?.toString() ?? 
+                  attrs['recipientId']?.toString() ?? 
+                  attrs['toUserId']?.toString();
+                  
+    String? uId = widget.item['relationships']?['user']?['data']?['id']?.toString() ?? 
+                  attrs['userId']?.toString();
 
-    // 解析打赏方
-    final senderNode = _getIncluded('users', senderId);
-    if (senderNode != null) {
-       _senderName = senderNode['attributes']?['displayName'] ?? senderNode['attributes']?['username'] ?? '未知用户';
-    } else {
-       if (senderId != null) {
-          try {
-            final res = await widget.api.getUser(int.parse(senderId));
-            if (mounted) setState(() => _senderName = res['data']?['attributes']?['displayName'] ?? res['data']?['attributes']?['username'] ?? '未知用户');
-          } catch (_) {
-            if (mounted) setState(() => _senderName = '未知用户');
-          }
-       } else {
-          _senderName = '系统操作';
-       }
-    }
-
-    // 解析接收方
-    final recipientNode = _getIncluded('users', recipientId);
-    if (recipientNode != null) {
-       _recipientName = recipientNode['attributes']?['displayName'] ?? recipientNode['attributes']?['username'] ?? '未知用户';
-    } else {
-       if (recipientId != null) {
-          try {
-            final res = await widget.api.getUser(int.parse(recipientId));
-            if (mounted) setState(() => _recipientName = res['data']?['attributes']?['displayName'] ?? res['data']?['attributes']?['username'] ?? '未知用户');
-          } catch (_) {
-            if (mounted) setState(() => _recipientName = '未知用户');
-          }
-       } else {
-          _recipientName = '帖子作者';
-       }
-    }
+    double amountVal = double.tryParse(_amount) ?? 0.0;
     
-    if (mounted) setState(() {});
+    if (sId == null && rId == null && uId != null) {
+        if (amountVal > 0) {
+            rId = uId; 
+        } else if (amountVal < 0) {
+            sId = uId; 
+        }
+    }
+
+    if (rId == null && _discussionId != null) {
+        final postId = widget.item['relationships']?['post']?['data']?['id']?.toString() ?? attrs['postId']?.toString();
+        if (postId != null) {
+            final pNode = _getIncluded('posts', postId);
+            if (pNode != null) {
+                rId = pNode['relationships']?['user']?['data']?['id']?.toString();
+            } else {
+                try {
+                    final pRes = await widget.api.getDynamicList('/api/posts/$postId');
+                    rId = pRes['data']?['relationships']?['user']?['data']?['id']?.toString();
+                } catch (_) {}
+            }
+        }
+    }
+
+    String resolvedSender = await _resolveUserName(sId, '系统');
+    String resolvedRecipient = await _resolveUserName(rId, '未知用户');
+
+    if (mounted) {
+        setState(() {
+            _senderName = resolvedSender;
+            _recipientName = resolvedRecipient;
+        });
+    }
   }
 
   @override
