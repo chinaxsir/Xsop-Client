@@ -88,13 +88,16 @@ class _UserActivityPageState extends State<UserActivityPage> {
         
         _items = uniqueMap.values.where((p) {
            final type = p['attributes']?['contentType'];
+           // 防止系统日志引发灰屏，如果是管理员等导致的特殊记录，一律剔除只留 comment
            if (type != 'comment') return false; 
            
            final relUserId = p['relationships']?['user']?['data']?['id']?.toString();
            final attrUserId = p['attributes']?['userId']?.toString();
            
+           // 防串号，不是这哥们的坚决不要
            if (relUserId != null && relUserId != uid) return false;
            if (attrUserId != null && attrUserId != uid) return false;
+           
            return true; 
         }).toList();
         
@@ -136,7 +139,7 @@ class _UserActivityPageState extends State<UserActivityPage> {
         }
 
         _items = uniqueMap.values.toList();
-        _customEmptyMessage = '暂无站务警告。';
+        _customEmptyMessage = '暂无站务警告记录。';
       } 
       else if (widget.activityType == 'tips') {
         final endpoints = [
@@ -148,9 +151,9 @@ class _UserActivityPageState extends State<UserActivityPage> {
         final Map<String, dynamic> uniqueMap = {};
         
         for (var ep in endpoints) {
-          final r1 = await _safeFetch(ep, {'filter[user]': uid, 'include': 'sender,recipient,post'});
-          final r2 = await _safeFetch(ep, {'filter[sender]': uid, 'include': 'sender,recipient,post'});
-          final r3 = await _safeFetch(ep, {'filter[recipient]': uid, 'include': 'sender,recipient,post'});
+          final r1 = await _safeFetch(ep, {'filter[user]': uid, 'include': 'sender,recipient,post,user'});
+          final r2 = await _safeFetch(ep, {'filter[sender]': uid, 'include': 'sender,recipient,post,user'});
+          final r3 = await _safeFetch(ep, {'filter[recipient]': uid, 'include': 'sender,recipient,post,user'});
           final r4 = await _safeFetch(ep, {}); 
           
           for(var i in [..._extractData(r1['data']), ..._extractData(r2['data']), ..._extractData(r3['data']), ..._extractData(r4['data'])]) {
@@ -261,7 +264,7 @@ class _UserActivityPageState extends State<UserActivityPage> {
                  await Future.delayed(const Duration(milliseconds: 400));
                  _loadData();
               }, 
-              child: const Text('重新加载')
+              child: const Text('重新加载数据')
             ),
           ],
         ),
@@ -296,9 +299,10 @@ class _UserActivityPageState extends State<UserActivityPage> {
       separatorBuilder: (_, __) => const SizedBox(height: 12),
       itemBuilder: (context, index) {
         final item = _items[index];
+        final type = item['type'];
         
         if (widget.activityType == 'warnings') return _buildWarningItem(item);
-        if (widget.activityType == 'tips') return _buildTipItem(item);
+        if (widget.activityType == 'tips' || type == 'rewards' || type == 'post_tips' || type == 'moneyRewards') return _TipItemWidget(item: item, api: widget.api, included: _included);
         if (widget.activityType == 'posts') return _buildPostItem(item);
         
         return _buildDefaultItem(item);
@@ -350,116 +354,6 @@ class _UserActivityPageState extends State<UserActivityPage> {
           const SizedBox(height: 6),
           Text('时间：$timeDisplay', style: TextStyle(color: Colors.grey.shade400, fontSize: 11)),
         ],
-      ),
-    );
-  }
-
-  // [高度还原用户需求的打赏记录 UI，同时清洗掉造作词汇]
-  Widget _buildTipItem(Map<String, dynamic> item) {
-    final attrs = item['attributes'] ?? {};
-    final amount = attrs['amount']?.toString() ?? attrs['money']?.toString() ?? attrs['value']?.toString() ?? attrs['reward']?.toString() ?? '0';
-    final timeStr = attrs['createdAt']?.toString();
-    
-    final balance = attrs['balance']?.toString() ?? attrs['currentBalance']?.toString();
-    
-    String timeDisplay = '未知';
-    if (timeStr != null) {
-      try { timeDisplay = formatRelativeTime(DateTime.parse(timeStr)); } catch (_) {}
-    }
-
-    final senderId = item['relationships']?['sender']?['data']?['id']?.toString() ?? attrs['senderId']?.toString() ?? attrs['fromUserId']?.toString();
-    final sender = _getIncluded('users', senderId);
-    final senderName = sender?['attributes']?['displayName'] ?? sender?['attributes']?['username'] ?? '未知用户';
-
-    final recipientId = item['relationships']?['recipient']?['data']?['id']?.toString() ?? attrs['recipientId']?.toString() ?? attrs['toUserId']?.toString();
-    final recipient = _getIncluded('users', recipientId);
-    final recipientName = recipient?['attributes']?['displayName'] ?? recipient?['attributes']?['username'] ?? '未知用户';
-
-    String discussionTitle = '';
-    String? discussionId;
-    final postId = item['relationships']?['post']?['data']?['id']?.toString() ?? attrs['postId']?.toString();
-    
-    if (postId != null) {
-      final postNode = _getIncluded('posts', postId);
-      if (postNode != null) {
-         discussionId = postNode['relationships']?['discussion']?['data']?['id']?.toString();
-      }
-    }
-    if (discussionId == null) {
-      discussionId = item['relationships']?['discussion']?['data']?['id']?.toString();
-    }
-    
-    if (discussionId != null) {
-      final dNode = _getIncluded('discussions', discussionId);
-      if (dNode != null) {
-         discussionTitle = dNode['attributes']?['title'] ?? '未知帖子';
-      }
-    }
-
-    return InkWell(
-      onTap: discussionId != null ? () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => DiscussionDetailPage(
-              api: widget.api,
-              discussion: Discussion(
-                id: discussionId!, 
-                title: discussionTitle,
-                commentCount: 0, 
-                createdAt: DateTime.now(),
-                tags: const [], 
-              ),
-            ),
-          ),
-        );
-      } : null,
-      child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 16),
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(color: Colors.white, border: Border.all(color: Colors.orange.shade200), borderRadius: BorderRadius.circular(8)),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const Icon(Icons.card_giftcard, size: 18, color: Colors.orange),
-                const SizedBox(width: 8),
-                Text('打赏记录 ($amount XSD)', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Text.rich(
-              TextSpan(
-                children: [
-                  const TextSpan(text: '打赏用户：', style: TextStyle(color: Colors.grey)),
-                  TextSpan(text: senderName, style: const TextStyle(fontWeight: FontWeight.w500, color: Colors.black87)),
-                  const TextSpan(text: '  →  ', style: TextStyle(color: Colors.grey)),
-                  TextSpan(text: recipientName, style: const TextStyle(fontWeight: FontWeight.w500, color: Colors.black87)),
-                ],
-              ),
-              style: const TextStyle(fontSize: 14),
-            ),
-            if (balance != null) ...[
-              const SizedBox(height: 8),
-              Text('当前余额：$balance XSD', style: const TextStyle(color: Colors.black87, fontSize: 14)),
-            ],
-            if (discussionTitle.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Text.rich(
-                TextSpan(
-                  children: [
-                    const TextSpan(text: '相关帖子：', style: TextStyle(color: Colors.grey)),
-                    TextSpan(text: discussionTitle, style: const TextStyle(color: Colors.blueAccent)),
-                  ],
-                ),
-                style: const TextStyle(fontSize: 14),
-              ),
-            ],
-            const SizedBox(height: 12),
-            Text('时间：$timeDisplay', style: TextStyle(color: Colors.grey.shade500, fontSize: 12)),
-          ],
-        ),
       ),
     );
   }
@@ -553,7 +447,7 @@ class _UserActivityPageState extends State<UserActivityPage> {
           
           Padding(
             padding: const EdgeInsets.only(left: 16, right: 16, bottom: 16),
-            child: Text('回复于 $timeDisplay', style: TextStyle(fontSize: 12, color: Colors.grey.shade400)),
+            child: Text('时间：$timeDisplay', style: TextStyle(fontSize: 12, color: Colors.grey.shade400)),
           ),
         ],
       ),
@@ -579,6 +473,190 @@ class _UserActivityPageState extends State<UserActivityPage> {
           const SizedBox(height: 8),
           Text(timeDisplay, style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
         ],
+      ),
+    );
+  }
+}
+
+// [核心防御：单独分离出来的打赏渲染组件，通过 API 强制追溯真实姓名]
+class _TipItemWidget extends StatefulWidget {
+  final Map<String, dynamic> item;
+  final ApiClient api;
+  final List<dynamic> included;
+
+  const _TipItemWidget({required this.item, required this.api, required this.included});
+
+  @override
+  State<_TipItemWidget> createState() => _TipItemWidgetState();
+}
+
+class _TipItemWidgetState extends State<_TipItemWidget> {
+  String _senderName = '加载中...';
+  String _recipientName = '加载中...';
+  String _discussionTitle = '';
+  String? _discussionId;
+  String _amount = '0';
+  String _timeDisplay = '未知';
+  String? _balance;
+
+  @override
+  void initState() {
+    super.initState();
+    _parseInitialData();
+    _fetchMissingNames();
+  }
+
+  Map<String, dynamic>? _getIncluded(String type, String? id) {
+    if (id == null) return null;
+    try {
+      return widget.included.firstWhere((e) => e['type'] == type && e['id'].toString() == id);
+    } catch (_) { return null; }
+  }
+
+  void _parseInitialData() {
+    final attrs = widget.item['attributes'] ?? {};
+    _amount = attrs['amount']?.toString() ?? attrs['money']?.toString() ?? attrs['value']?.toString() ?? attrs['reward']?.toString() ?? '0';
+    _balance = attrs['balance']?.toString() ?? attrs['currentBalance']?.toString();
+    
+    final timeStr = attrs['createdAt']?.toString();
+    if (timeStr != null) {
+      try { _timeDisplay = formatRelativeTime(DateTime.parse(timeStr)); } catch (_) {}
+    }
+
+    final postId = widget.item['relationships']?['post']?['data']?['id']?.toString() ?? attrs['postId']?.toString();
+    if (postId != null) {
+      final postNode = _getIncluded('posts', postId);
+      if (postNode != null) {
+         _discussionId = postNode['relationships']?['discussion']?['data']?['id']?.toString();
+      }
+    }
+    _discussionId ??= widget.item['relationships']?['discussion']?['data']?['id']?.toString();
+    
+    if (_discussionId != null) {
+      final dNode = _getIncluded('discussions', _discussionId);
+      if (dNode != null) {
+         _discussionTitle = dNode['attributes']?['title'] ?? '未知帖子';
+      }
+    }
+  }
+
+  Future<void> _fetchMissingNames() async {
+    final attrs = widget.item['attributes'] ?? {};
+    
+    final senderId = widget.item['relationships']?['sender']?['data']?['id']?.toString() ?? 
+                     widget.item['relationships']?['user']?['data']?['id']?.toString() ?? 
+                     attrs['senderId']?.toString() ?? 
+                     attrs['fromUserId']?.toString() ?? 
+                     attrs['userId']?.toString();
+
+    final recipientId = widget.item['relationships']?['recipient']?['data']?['id']?.toString() ?? 
+                        widget.item['relationships']?['post']?['data']?['user']?['id']?.toString() ?? 
+                        attrs['recipientId']?.toString() ?? 
+                        attrs['toUserId']?.toString();
+
+    // 解析打赏方
+    final senderNode = _getIncluded('users', senderId);
+    if (senderNode != null) {
+       _senderName = senderNode['attributes']?['displayName'] ?? senderNode['attributes']?['username'] ?? '未知用户';
+    } else {
+       if (senderId != null) {
+          try {
+            final res = await widget.api.getUser(int.parse(senderId));
+            if (mounted) setState(() => _senderName = res['data']?['attributes']?['displayName'] ?? res['data']?['attributes']?['username'] ?? '未知用户');
+          } catch (_) {
+            if (mounted) setState(() => _senderName = '未知用户');
+          }
+       } else {
+          _senderName = '系统操作';
+       }
+    }
+
+    // 解析接收方
+    final recipientNode = _getIncluded('users', recipientId);
+    if (recipientNode != null) {
+       _recipientName = recipientNode['attributes']?['displayName'] ?? recipientNode['attributes']?['username'] ?? '未知用户';
+    } else {
+       if (recipientId != null) {
+          try {
+            final res = await widget.api.getUser(int.parse(recipientId));
+            if (mounted) setState(() => _recipientName = res['data']?['attributes']?['displayName'] ?? res['data']?['attributes']?['username'] ?? '未知用户');
+          } catch (_) {
+            if (mounted) setState(() => _recipientName = '未知用户');
+          }
+       } else {
+          _recipientName = '帖子作者';
+       }
+    }
+    
+    if (mounted) setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: _discussionId != null ? () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => DiscussionDetailPage(
+              api: widget.api,
+              discussion: Discussion(
+                id: _discussionId!, 
+                title: _discussionTitle,
+                commentCount: 0, 
+                createdAt: DateTime.now(),
+                tags: const [], 
+              ),
+            ),
+          ),
+        );
+      } : null,
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 16),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(color: Colors.white, border: Border.all(color: Colors.orange.shade200), borderRadius: BorderRadius.circular(8)),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.card_giftcard, size: 18, color: Colors.orange),
+                const SizedBox(width: 8),
+                Text('打赏记录 ($_amount XSD)', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Text.rich(
+              TextSpan(
+                children: [
+                  const TextSpan(text: '打赏用户：', style: TextStyle(color: Colors.grey)),
+                  TextSpan(text: _senderName, style: const TextStyle(fontWeight: FontWeight.w500, color: Colors.black87)),
+                  const TextSpan(text: '  →  ', style: TextStyle(color: Colors.grey)),
+                  TextSpan(text: _recipientName, style: const TextStyle(fontWeight: FontWeight.w500, color: Colors.black87)),
+                ],
+              ),
+              style: const TextStyle(fontSize: 14),
+            ),
+            if (_balance != null) ...[
+              const SizedBox(height: 8),
+              Text('当前余额：$_balance XSD', style: const TextStyle(color: Colors.black87, fontSize: 14)),
+            ],
+            if (_discussionTitle.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text.rich(
+                TextSpan(
+                  children: [
+                    const TextSpan(text: '相关帖子：', style: TextStyle(color: Colors.grey)),
+                    TextSpan(text: _discussionTitle, style: const TextStyle(color: Colors.blueAccent)),
+                  ],
+                ),
+                style: const TextStyle(fontSize: 14),
+              ),
+            ],
+            const SizedBox(height: 12),
+            Text('时间：$_timeDisplay', style: TextStyle(color: Colors.grey.shade500, fontSize: 12)),
+          ],
+        ),
       ),
     );
   }
