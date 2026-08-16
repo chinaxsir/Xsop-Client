@@ -53,7 +53,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
         });
       }
     } catch (e) {
-      // 忽略刷新错误，保持旧数据展示
+      // 忽略网络波动，保持旧数据展示
     } finally {
       if (mounted) setState(() => _isRefreshing = false);
     }
@@ -73,6 +73,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
     );
   }
 
+  // 严格采用 Flarum 官方“站务警告”逻辑
   Future<void> _showAdminWarnDialog() async {
     final strikesCtrl = TextEditingController(text: '1');
     final publicCtrl = TextEditingController();
@@ -95,11 +96,11 @@ class _UserProfilePageState extends State<UserProfilePage> {
                 const SizedBox(height: 6),
                 TextField(controller: strikesCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(border: OutlineInputBorder(), isDense: true)),
                 const SizedBox(height: 16),
-                const Text('用户批注。为什么警告？（批注对用户可见）', style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.bold)),
+                const Text('用户批注（对用户可见）', style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 6),
                 TextField(controller: publicCtrl, maxLines: 3, decoration: const InputDecoration(border: OutlineInputBorder())),
                 const SizedBox(height: 16),
-                const Text('管理员备注。（备注仅对管理员可见）', style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.bold)),
+                const Text('管理员备注（仅管理员可见）', style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 6),
                 TextField(controller: privateCtrl, maxLines: 3, decoration: const InputDecoration(border: OutlineInputBorder())),
               ],
@@ -120,11 +121,11 @@ class _UserProfilePageState extends State<UserProfilePage> {
                   );
                   if (mounted) {
                     Navigator.pop(ctx);
-                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('处罚记录已下发！')));
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('警告已发送')));
                   }
                 } on DioException catch (e) {
-                  String errMsg = '操作失败：您可能没有权限';
-                  if (e.response?.statusCode == 403) errMsg = '越权操作：当前账号无权对该用户下发警告';
+                  String errMsg = '操作失败：权限不足';
+                  if (e.response?.statusCode == 403) errMsg = '权限不足：您无权执行此操作';
                   if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg)));
                 } finally {
                   if (mounted) setStateDialog(() => isSubmitting = false);
@@ -198,12 +199,11 @@ class _UserProfilePageState extends State<UserProfilePage> {
                     ),
                     const SizedBox(height: 24),
 
-                    // [深刻修复：新增资金明细专属入口]
+                    // [核心修复：已经取消了多余的资金明细，仅保留 Flarum 核心的打赏记录和警告]
                     _buildSectionGroup(
                       title: '个人记录',
                       items: [
                         _MenuItem(icon: Icons.card_giftcard, color: Colors.orange, title: '打赏记录', onTap: () => _navigateToActivity('打赏记录', 'tips')),
-                        _MenuItem(icon: Icons.account_balance_wallet, color: Colors.green, title: '资金明细', onTap: () => _navigateToActivity('资金明细', 'money')),
                         _MenuItem(icon: Icons.warning_amber_rounded, color: Colors.red, title: '站务警告', onTap: () => _navigateToActivity('站务警告', 'warnings')),
                       ],
                     ),
@@ -214,7 +214,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
                         title: '系统设置',
                         items: [
                           _MenuItem(icon: Icons.settings_outlined, color: Colors.grey.shade700, title: '账号设置', onTap: () {
-                             ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请前往网页版进行账号核心安全设置')));
+                             ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请前往网页版进行账号设置')));
                           }),
                           _MenuItem(
                             icon: Icons.exit_to_app, 
