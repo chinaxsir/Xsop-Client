@@ -78,7 +78,6 @@ class _UserActivityPageState extends State<UserActivityPage> {
         _customEmptyMessage = '未发布任何主题。';
       } 
       else if (widget.activityType == 'posts') {
-        // [极速优化：并发请求]
         final results = await Future.wait([
           _safeFetch('/api/posts', {'filter[user]': uid, 'include': 'discussion,user'}),
           _safeFetch('/api/posts', {'filter[author]': uname, 'include': 'discussion,user'}),
@@ -107,7 +106,6 @@ class _UserActivityPageState extends State<UserActivityPage> {
         _customEmptyMessage = '无回复记录。';
       } 
       else if (widget.activityType == 'warnings') {
-        // [极速优化：所有警告路由使用并发 (Future.wait) 齐发，消灭串行等待！]
         final results = await Future.wait([
           _safeFetch('/api/warnings/$uid', {'include': 'addedByUser,user,post'}),
           _safeFetch('/api/warnings', {'filter[user]': uid, 'include': 'addedByUser,user,post'}),
@@ -131,7 +129,6 @@ class _UserActivityPageState extends State<UserActivityPage> {
         _customEmptyMessage = '暂无站务警告。';
       } 
       else if (widget.activityType == 'tips') {
-        // [极速优化：打赏探针全并发模式，10秒加载压缩至1秒内]
         final results = await Future.wait([
           _safeFetch('/api/users/$uid/money-rewards', {'include': 'sender,recipient,post'}),
           _safeFetch('/api/tips', {'filter[user]': uid, 'include': 'sender,recipient,post'}),
@@ -144,19 +141,68 @@ class _UserActivityPageState extends State<UserActivityPage> {
         final Map<String, dynamic> uniqueMap = {};
         for (var res in results) {
           for(var i in _extractData(res['data'])) {
-            if (i['id'] != null) uniqueMap[i['id'].toString()] = i;
+            if (i['id'] != null) {
+                // [核心拦截器：剔除金额为 0 的初始化幽灵数据]
+                final attrs = i['attributes'] ?? {};
+                final amtStr = attrs['amount']?.toString() ?? attrs['money']?.toString() ?? attrs['value']?.toString() ?? attrs['reward']?.toString() ?? '0';
+                final amt = double.tryParse(amtStr.replaceAll(RegExp(r'[^0-9\.\-]'), '')) ?? 0.0;
+                if (amt != 0.0) uniqueMap[i['id'].toString()] = i;
+            }
           }
           _included.addAll(_extractData(res['included']));
           
           for (var i in _extractData(res['included'])) {
              if (i['type'] == 'tips' || i['type'] == 'rewards' || i['type'] == 'post_tips' || i['type'] == 'moneyRewards') {
-                 uniqueMap[i['id'].toString()] = i;
+                 // [核心拦截器：剔除金额为 0 的初始化幽灵数据]
+                 final attrs = i['attributes'] ?? {};
+                 final amtStr = attrs['amount']?.toString() ?? attrs['money']?.toString() ?? attrs['value']?.toString() ?? attrs['reward']?.toString() ?? '0';
+                 final amt = double.tryParse(amtStr.replaceAll(RegExp(r'[^0-9\.\-]'), '')) ?? 0.0;
+                 if (amt != 0.0) uniqueMap[i['id'].toString()] = i;
              }
           }
         }
 
         _items = uniqueMap.values.toList();
         _customEmptyMessage = '暂无打赏记录。';
+      }
+      else if (widget.activityType == 'money') {
+        // [极速优化：并发请求所有资金流水，并剔除金额为 0 的无用数据]
+        final endpoints = ['/api/users/$uid/money-transactions', '/api/user-money-histories', '/api/moneyHistory', '/api/users/$uid/moneyHistory', '/api/money-transfers', '/api/transactions'];
+        
+        List<Future<Map<String, dynamic>>> tasks = [];
+        for (var ep in endpoints) {
+           tasks.add(_safeFetch(ep, {'filter[user]': uid}));
+           tasks.add(_safeFetch(ep, {}));
+        }
+        for (var inc in ['moneyHistory', 'userMoneyHistories', 'transactions', 'moneyTransactions']) {
+           tasks.add(_safeFetch('/api/users/$uid', {'include': inc}));
+        }
+
+        final results = await Future.wait(tasks);
+        final Map<String, dynamic> uniqueMap = {};
+        
+        for (var res in results) {
+           for(var i in _extractData(res['data'])) {
+             if (i['id'] != null) {
+                 final attrs = i['attributes'] ?? {};
+                 final amtStr = attrs['amount']?.toString() ?? attrs['money']?.toString() ?? attrs['balance_delta']?.toString() ?? '0';
+                 final amt = double.tryParse(amtStr.replaceAll(RegExp(r'[^0-9\.\-]'), '')) ?? 0.0;
+                 if (amt != 0.0) uniqueMap[i['id'].toString()] = i;
+             }
+           }
+           _included.addAll(_extractData(res['included']));
+           
+           for (var i in _extractData(res['included'])) {
+               if (i['type'] == 'moneyHistory' || i['type'] == 'user-money-histories' || i['type'] == 'transactions' || i['type'] == 'moneyTransactions') {
+                   final attrs = i['attributes'] ?? {};
+                   final amtStr = attrs['amount']?.toString() ?? attrs['money']?.toString() ?? attrs['balance_delta']?.toString() ?? '0';
+                   final amt = double.tryParse(amtStr.replaceAll(RegExp(r'[^0-9\.\-]'), '')) ?? 0.0;
+                   if (amt != 0.0) uniqueMap[i['id'].toString()] = i;
+               }
+           }
+        }
+        _items = uniqueMap.values.toList();
+        _customEmptyMessage = '暂无资金明细。';
       }
 
       if (_items.isNotEmpty) {
@@ -276,6 +322,7 @@ class _UserActivityPageState extends State<UserActivityPage> {
         
         if (widget.activityType == 'warnings') return _buildWarningItem(item);
         if (widget.activityType == 'tips' || type == 'rewards' || type == 'post_tips' || type == 'moneyRewards') return _TipItemWidget(item: item, api: widget.api, included: _included, profileUser: widget.user);
+        if (widget.activityType == 'moneyHistory' || type == 'user-money-histories' || type == 'money_transfers' || type == 'transactions' || type == 'moneyTransactions') return _buildMoneyItem(item);
         if (widget.activityType == 'posts') return _buildPostItem(item);
         
         return _buildDefaultItem(item);
@@ -326,6 +373,48 @@ class _UserActivityPageState extends State<UserActivityPage> {
           Text('$adminName 警告了 $targetName', style: TextStyle(color: Colors.grey.shade600, fontSize: 12, fontWeight: FontWeight.bold)),
           const SizedBox(height: 6),
           Text('时间：$timeDisplay', style: TextStyle(color: Colors.grey.shade400, fontSize: 11)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMoneyItem(Map<String, dynamic> item) {
+    final attrs = item['attributes'] ?? {};
+    final amount = attrs['amount']?.toString() ?? attrs['money']?.toString() ?? attrs['balance_delta']?.toString() ?? '0';
+    final desc = attrs['description']?.toString() ?? attrs['reason']?.toString() ?? attrs['source']?.toString() ?? '系统变动';
+    
+    final timeStr = attrs['createdAt']?.toString();
+    String timeDisplay = '未知';
+    if (timeStr != null) {
+      try { timeDisplay = formatRelativeTime(DateTime.parse(timeStr)); } catch (_) {}
+    }
+    
+    final isIncome = !amount.startsWith('-');
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(color: Colors.white, border: Border.all(color: Colors.green.shade200), borderRadius: BorderRadius.circular(8)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.account_balance_wallet, size: 18, color: isIncome ? Colors.green : Colors.grey.shade600),
+                  const SizedBox(width: 8),
+                  Text('资金明细', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+                ],
+              ),
+              Text('${isIncome && amount != "0" && !amount.startsWith("+") ? "+" : ""}$amount XSD', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: isIncome ? Colors.green : Colors.black87)),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text('事由：$desc', style: const TextStyle(color: Colors.black87, fontSize: 14)),
+          const SizedBox(height: 12),
+          Text('时间：$timeDisplay', style: TextStyle(color: Colors.grey.shade500, fontSize: 12)),
         ],
       ),
     );
@@ -442,7 +531,7 @@ class _UserActivityPageState extends State<UserActivityPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(attrs['title'] ?? attrs['description'] ?? attrs['reason'] ?? '记录', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Colors.black87)),
+          Text(attrs['title'] ?? attrs['description'] ?? attrs['reason'] ?? '基础记录', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Colors.black87)),
           const SizedBox(height: 8),
           Text(timeDisplay, style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
         ],
