@@ -85,7 +85,6 @@ class _EditorPageState extends State<EditorPage> {
       return;
     }
     
-    // [强校验] 针对发新帖的拦截
     if (!isReply && !isEdit) {
       if (title.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('标题不能为空')));
@@ -195,25 +194,39 @@ class _EditorPageState extends State<EditorPage> {
     }
   }
 
-  // [极度严谨的标签权限与排版控制器]
+  // [完美贴合 Flarum 的父子级联选择逻辑]
   void _handleTagSelection(FlarumTag tag, bool isSelected) {
     setState(() {
       if (isSelected) {
         if (tag.isPrimary) {
-          // 逻辑 1：主标签【单选互斥】。一旦选中新的，自动排遣之前的主标签。
+          // 单选互斥机制：先清空所有已选的主标签
           _selectedTags.removeWhere((t) => t.isPrimary);
           _selectedTags.add(tag);
+          // 如果你选了一个“子标签”，系统自动把它的“父标签”也勾选上！
+          if (tag.isChild) {
+            try {
+              final parent = _tags.firstWhere((t) => t.id == tag.parentId);
+              _selectedTags.add(parent);
+            } catch (_) {}
+          }
         } else {
-          // 逻辑 2：次级标签【容量拦截】。拦截超过 2 个次级标签的选择。
+          // 次级标签处理
           final secondaryCount = _selectedTags.where((t) => !t.isPrimary).length;
-          if (secondaryCount >= 2) {
+          if (secondaryCount >= 2 && !_selectedTags.contains(tag)) {
             ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('最多只能选择 2 个次级标签')));
-            return; // 阻止后续操作
+            return; 
           }
           _selectedTags.add(tag);
+          if (tag.isChild) {
+            try {
+              final parent = _tags.firstWhere((t) => t.id == tag.parentId);
+              if (!_selectedTags.contains(parent)) {
+                 _selectedTags.add(parent);
+              }
+            } catch (_) {}
+          }
         }
 
-        // 逻辑 3：特定标签（Cash）激活专用模板
         if (tag.slug.toLowerCase().contains('cash') || tag.name.contains('Cash') || tag.name.contains('收费')) {
            if (!_contentController.text.contains('提现申请核验单')) {
               _contentController.text += '\n💸 提现申请核验单\n*请仔细核对以下信息，防刷单核对用。*\n\n- **提现金额 (XSD): ** [填写纯数字，最低100]\n- **收款方式: ** [填写方式，如支付宝、微信]\n- **收款账号: ** [填写完整账号]\n- **真实姓名: ** [填写您的真实姓名]\n';
@@ -221,8 +234,9 @@ class _EditorPageState extends State<EditorPage> {
            }
         }
       } else {
-        // 允许取消选中
         _selectedTags.remove(tag);
+        // [级联取消] 如果你取消勾选了一个“父标签”，它下面挂着的所有“子标签”也全部取消勾选！
+        _selectedTags.removeWhere((t) => t.isChild && t.parentId == tag.id);
       }
     });
   }
@@ -302,6 +316,54 @@ class _EditorPageState extends State<EditorPage> {
     );
   }
 
+  // [核心重构：发帖页面的树状组合排版引擎]
+  Widget _buildTagGroup(List<FlarumTag> tags) {
+    // 分离出父标签，以及找不到父亲的“孤儿标签”兜底
+    final parentTags = tags.where((t) => !t.isChild).toList();
+    final orphanChildren = tags.where((t) => t.isChild && !parentTags.any((p) => p.id == t.parentId)).toList();
+
+    List<Widget> columns = [];
+    for (final parent in parentTags) {
+      final children = tags.where((t) => t.isChild && t.parentId == parent.id).toList();
+      columns.add(
+        Container(
+          margin: const EdgeInsets.only(bottom: 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildTagChip(parent),
+              // 如果它下面有子标签，在下面用小间距渲染一层嵌套的 Wrap
+              if (children.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(left: 16, top: 8),
+                  child: Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: children.map((c) => _buildTagChip(c)).toList(),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      );
+    }
+    
+    if (orphanChildren.isNotEmpty) {
+      columns.add(
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: orphanChildren.map((c) => _buildTagChip(c)).toList(),
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: columns,
+    );
+  }
+
   Widget _buildHeader() {
     if (_isLoadingTags) return const Padding(padding: EdgeInsets.all(24), child: Center(child: CircularProgressIndicator()));
     final primaryTags = _tags.where((t) => t.isPrimary).toList();
@@ -325,16 +387,15 @@ class _EditorPageState extends State<EditorPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 if (primaryTags.isNotEmpty) ...[
-                  // 更新了引导性文案，让用户明确单选的规则
                   Text('主标签 (必须且只能选 1 个)', style: TextStyle(fontSize: 12, color: Colors.grey.shade500, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 8),
-                  Wrap(spacing: 8, runSpacing: 8, children: primaryTags.map((t) => _buildTagChip(t)).toList()),
+                  _buildTagGroup(primaryTags), // 引入嵌套排版引擎
                 ],
                 if (secondaryTags.isNotEmpty) ...[
                   const SizedBox(height: 16),
                   Text('次级标签 (最多选 2 个)', style: TextStyle(fontSize: 12, color: Colors.grey.shade500, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 8),
-                  Wrap(spacing: 8, runSpacing: 8, children: secondaryTags.map((t) => _buildTagChip(t)).toList()),
+                  _buildTagGroup(secondaryTags), // 引入嵌套排版引擎
                 ],
               ],
             ),
