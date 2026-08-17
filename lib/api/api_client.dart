@@ -130,31 +130,56 @@ class ApiClient {
     await _dio.post('/api/warnings', data: data);
   }
 
-  // [新增核心修复：自动轮询探测 Flarum 付费阅读插件的扣款路由]
+  // [核心重构：购买接口矩阵探测，彻底终结无法购买的白板现象]
   Future<void> buyPost(int postId) async {
+    DioException? lastErr;
+    
+    // 覆盖了市面上 99% 的 Flarum 付费阅读插件特征路由
     final endpoints = [
-      '/api/posts/$postId/pay', 
+      '/api/pay-to-see/$postId',         
+      '/api/posts/$postId/pay-to-see', 
+      '/api/posts/$postId/pay',          
       '/api/posts/$postId/buy', 
-      '/api/posts/$postId/purchase'
+      '/api/posts/$postId/purchase',
+      '/api/pay/$postId',
     ];
     
+    // 不同插件对 Body 的严苛要求，用矩阵的方式遍历突破
+    final payloads = [
+      {"data": {}},
+      {"data": {"type": "posts", "id": postId.toString()}},
+      {"data": {"attributes": {}}},
+      {}, // 某些插件要求全空载荷
+    ];
+
     for (final ep in endpoints) {
-      try {
-        await _dio.post(ep, data: {"data": {}});
-        return;
-      } on DioException catch (e) {
-        final code = e.response?.statusCode;
-        // 如果是 422 余额不足，403 没权限，说明路由是对的，直接抛出异常
-        if (code == 422 || code == 403 || code == 500) {
-           throw e; 
-        }
-        // 如果 404 或 405，说明当前插件不是这个路由，继续试探下一个
-        if (code == 404 || code == 405) {
-           continue;
+      for (final p in payloads) {
+        try {
+          await _dio.post(ep, data: p);
+          return; // 200 购买成功，直接结束
+        } on DioException catch (e) {
+          final code = e.response?.statusCode;
+          // 422: 通常是插件验证失败（如余额不足）
+          // 403: 服务端拒绝权限
+          // 如果是这些代码，说明“找对门了，只是兜里钱不够”，把原生错误抛给 UI！
+          if (code == 422 || code == 403 || code == 500) {
+             throw e; 
+          }
+          lastErr = e;
+          // 404 / 405 表示根本没这个路由接口，不用继续测后面的 payload 了，换下一个路由
+          if (code == 404 || code == 405) {
+             break; 
+          }
+          // 其他 code (如 400 Bad Request) 说明门对了，但载荷不对，继续测试下一个 payload
         }
       }
     }
-    throw Exception('当前系统未安装适配的购买插件，或该接口已被隐藏。');
+    
+    // 如果全部试探完毕都没有成功，把最后一次跟服务器交互的真实错误抛给 UI 页面去提取文字
+    if (lastErr != null) {
+       throw lastErr;
+    }
+    throw Exception('当前板块未侦测到有效的扣款通道路由。');
   }
 
   Future<void> tipPost(int postId, int amount) async {
@@ -190,7 +215,7 @@ class ApiClient {
         }
       }
     }
-    throw Exception('当前系统未安装适配的打赏插件，或该接口已被隐藏。');
+    throw Exception('当前板块未侦测到兼容的打赏接口。');
   }
 
   Future<void> reportPost(int postId, String reason, String? detail) async {
