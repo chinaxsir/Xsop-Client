@@ -375,7 +375,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
     }
   }
   
-  // [核心绘制组件]：1:1 完美还原网页端的红色虚线支付框
+  // 核心绘制组件：1:1 完美还原网页端的红色虚线支付框
   Widget _buildPayBlock(String payAmount, String buyersCount) {
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 8),
@@ -503,47 +503,46 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
         final bool canEdit = attrs['canEdit'] == true;
         final bool canDelete = attrs['canDelete'] == true;
         
-        // --- [核心修复：绝杀级付费门槛探测引擎] ---
+        // --- [核心重构：绝对真空付费探测器] ---
         bool isPayProtected = false;
         String payAmount = '1';
         String buyersCount = '0';
 
-        // 1. 尝试从服务端下发的高级属性中提取金额和购买人数
+        // 1. 抓取服务端的显式数值（兼容各路插件）
         if (attrs['payAmount'] != null) payAmount = attrs['payAmount'].toString();
+        else if (attrs['price'] != null) payAmount = attrs['price'].toString();
+        
         if (attrs['paidUsersCount'] != null) buyersCount = attrs['paidUsersCount'].toString();
-        if (attrs['buyersCount'] != null) buyersCount = attrs['buyersCount'].toString();
+        else if (attrs['buyersCount'] != null) buyersCount = attrs['buyersCount'].toString();
 
-        // 2. 利用正则探查 Markdown 源码中的 [pay] 标签
-        final payRegex = RegExp(r'\[(pay|charge)[^\]]*\]');
-        if (payRegex.hasMatch(rawContent)) {
-            // 如果存在标签，顺便把隐藏在标签里的金额扣出来（例如 [pay amount=10]）
-            final amtMatch = RegExp(r'(amount|charge)=([0-9.]+)').firstMatch(rawContent);
-            if (amtMatch != null) {
-                payAmount = amtMatch.group(2)!;
-            }
-            
-            // 3. 鉴定当前用户是否具备查看权限
-            if (_currentUser == null) {
-                // 如果是游客（未登录），则 100% 无法查看，强制触发红色虚线购买框
-                isPayProtected = true; 
-            } else if (_currentUser!.id != userIdStr) {
-                // 如果已登录但不是原帖作者：
-                // 如果服务端为了防泄漏，彻底清空了 html，或者 html 里仅包含 "付费"、"购买" 等警告词
-                final plainText = htmlContent.replaceAll(RegExp(r'<[^>]*>'), '').trim();
-                if (plainText.isEmpty || plainText.contains('付费阅读') || plainText.contains('付费可见') || plainText.contains('购买')) {
-                    isPayProtected = true;
-                }
-                // 极个别插件会在属性里明确告诉客户端该用户是否已购买
-                if (attrs['hasPaid'] == true || attrs['isPaid'] == true) {
-                    isPayProtected = false;
-                }
-            }
-        } 
-        // 4. 备用兜底：即便没有 [pay] 标签，但服务器在属性里明确宣示了这是一篇付费帖
-        else if (attrs['isPay'] == true || (attrs['payAmount'] != null && attrs['hasPaid'] != true)) {
-            if (_currentUser == null || _currentUser!.id != userIdStr) {
+        // 2. 将 HTML 剥离所有的标签（比如 <p> <div> <br>），检查是否还剩下纯文本
+        String plainText = htmlContent.replaceAll(RegExp(r'<[^>]*>'), '').replaceAll('&nbsp;', '').trim();
+        
+        // 核心拦截条件 A：服务端明确指示此为付费内容，且当前用户没买！
+        if (attrs['isPay'] == true || attrs['payAmount'] != null || attrs['price'] != null) {
+            if (attrs['hasPaid'] != true && attrs['isPaid'] != true) {
                 isPayProtected = true;
             }
+        }
+
+        // 核心拦截条件 B (解决白板痛点)：Flarum 是不允许发送“空回复”的。
+        // 如果 HTML 里面没有字，也没有图片(<img)，也没有视频/外部框架(iframe)，
+        // 那 100% 是被服务端的付费或权限插件强制抹除了！毫不犹豫直接替换为付费框！
+        if (plainText.isEmpty && !htmlContent.contains('<img') && !htmlContent.contains('<iframe') && !htmlContent.contains('<video')) {
+            isPayProtected = true;
+        }
+
+        // 核心拦截条件 C：被插件硬编码替换成了警告文本
+        if (plainText.contains('付费可见') || plainText.contains('需要购买') || rawContent.contains('[pay') || rawContent.contains('[charge')) {
+            isPayProtected = true;
+        }
+
+        // 唯一的赦免权：如果你是帖子的作者本人，哪怕触发了上述条件，也把你的内容放行（防止作者看不到自己的付费帖）
+        if (_currentUser != null && _currentUser!.id == userIdStr) {
+             // 除非服务端连作者本人的内容也一起抹除得干干净净了，那就只能保持显示付费框
+             if (plainText.isNotEmpty || htmlContent.contains('<img')) {
+                 isPayProtected = false;
+             }
         }
 
         return Container(
@@ -581,7 +580,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
               ),
               const SizedBox(height: 12),
               
-              // [分叉渲染]：如果是锁定状态，渲染我们手搓的红色虚线购买框；如果是解锁状态，正常渲染文字
+              // 关键渲染支流：触发隐藏锁就画红框，否则正常渲染
               if (isPayProtected) 
                  _buildPayBlock(payAmount, buyersCount)
               else 
@@ -649,7 +648,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
   }
 }
 
-// 用于绘制 Flarum 网页版相同的红色虚线边框
+// 辅助绘制：红色虚线框
 class _DashedBorderPainter extends CustomPainter {
   final Color color;
   _DashedBorderPainter({required this.color});
