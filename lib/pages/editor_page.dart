@@ -39,8 +39,12 @@ class _EditorPageState extends State<EditorPage> {
   List<FlarumTag> _tags = [];
   List<FlarumTag> _selectedTags = [];
 
+  // [阶梯式交互核心状态]
+  bool _hasRevealedEditor = false;
+
   bool get isReply => widget.discussion != null;
   bool get isEdit => widget.postToEdit != null;
+  bool get hasSelectedPrimary => _selectedTags.any((t) => t.isPrimary);
 
   @override
   void initState() {
@@ -48,7 +52,10 @@ class _EditorPageState extends State<EditorPage> {
     if (isEdit) {
       _contentController.text = widget.initialContent ?? '';
     }
-    if (!isReply && !isEdit) {
+    // 如果是回帖或编辑，直接显示正文编辑框
+    if (isReply || isEdit) {
+      _hasRevealedEditor = true;
+    } else {
       if (widget.availableTags != null && widget.availableTags!.isNotEmpty) {
         _categorizeTags(widget.availableTags!);
       } else {
@@ -194,23 +201,29 @@ class _EditorPageState extends State<EditorPage> {
     }
   }
 
-  // [完美贴合 Flarum 的父子级联选择逻辑]
+  // [联动式标签处理机制]
   void _handleTagSelection(FlarumTag tag, bool isSelected) {
     setState(() {
       if (isSelected) {
         if (tag.isPrimary) {
-          // 单选互斥机制：先清空所有已选的主标签
+          // 主标签单选互斥
           _selectedTags.removeWhere((t) => t.isPrimary);
           _selectedTags.add(tag);
-          // 如果你选了一个“子标签”，系统自动把它的“父标签”也勾选上！
+          
           if (tag.isChild) {
             try {
               final parent = _tags.firstWhere((t) => t.id == tag.parentId);
               _selectedTags.add(parent);
             } catch (_) {}
           }
+          
+          // 如果系统根本没有次级标签，选完主标签就直接弹开正文框
+          final secondaryTags = _tags.where((t) => !t.isPrimary).toList();
+          if (secondaryTags.isEmpty) {
+             _hasRevealedEditor = true;
+          }
         } else {
-          // 次级标签处理
+          // 次级标签最多选两个
           final secondaryCount = _selectedTags.where((t) => !t.isPrimary).length;
           if (secondaryCount >= 2 && !_selectedTags.contains(tag)) {
             ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('最多只能选择 2 个次级标签')));
@@ -225,8 +238,11 @@ class _EditorPageState extends State<EditorPage> {
               }
             } catch (_) {}
           }
+          // 一旦选了次级标签，立刻弹开正文录入框
+          _hasRevealedEditor = true;
         }
 
+        // 自动拉取提现模板
         if (tag.slug.toLowerCase().contains('cash') || tag.name.contains('Cash') || tag.name.contains('收费')) {
            if (!_contentController.text.contains('提现申请核验单')) {
               _contentController.text += '\n💸 提现申请核验单\n*请仔细核对以下信息，防刷单核对用。*\n\n- **提现金额 (XSD): ** [填写纯数字，最低100]\n- **收款方式: ** [填写方式，如支付宝、微信]\n- **收款账号: ** [填写完整账号]\n- **真实姓名: ** [填写您的真实姓名]\n';
@@ -235,7 +251,7 @@ class _EditorPageState extends State<EditorPage> {
         }
       } else {
         _selectedTags.remove(tag);
-        // [级联取消] 如果你取消勾选了一个“父标签”，它下面挂着的所有“子标签”也全部取消勾选！
+        // 如果取消父级，子级一并取消
         _selectedTags.removeWhere((t) => t.isChild && t.parentId == tag.id);
       }
     });
@@ -256,34 +272,190 @@ class _EditorPageState extends State<EditorPage> {
             padding: const EdgeInsets.only(right: 16, top: 8, bottom: 8),
             child: FilledButton(
               onPressed: (_isSubmitting || _isUploading) ? null : _submit,
-              child: _isSubmitting ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('发送'),
+              child: _isSubmitting ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('发送', style: TextStyle(fontWeight: FontWeight.bold)),
             ),
           )
         ],
       ),
       body: Column(
         children: [
-          if (!isReply && !isEdit) _buildHeader(),
           if (_isUploading) const LinearProgressIndicator(minHeight: 2),
           const Divider(height: 1, thickness: 0.5, color: Color(0xFFE5E5EA)),
+          // [核心重构：滚动承载视窗] 彻底解决输入框被挤死的问题
           Expanded(
-            child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: TextField(
-                controller: _contentController,
-                maxLines: null,
-                expands: true,
-                decoration: InputDecoration(
-                  hintText: '分享你的想法 (支持 Markdown 语法)...',
-                  border: InputBorder.none,
-                  hintStyle: TextStyle(color: Colors.grey.shade400),
-                ),
-              ),
-            ),
+            child: _buildScrollableBody(),
           ),
           _buildToolbar(),
         ],
       ),
+    );
+  }
+
+  // 承载了标题、阶梯标签和自动扩展的正文输入框
+  Widget _buildScrollableBody() {
+    if (_isLoadingTags) return const Center(child: CircularProgressIndicator());
+
+    final primaryTags = _tags.where((t) => t.isPrimary).toList();
+    final secondaryTags = _tags.where((t) => !t.isPrimary).toList();
+
+    return ListView(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+      children: [
+        if (!isReply && !isEdit) ...[
+          // --- 模块 1：标题 ---
+          const Text('输入标题', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.black54)),
+          const SizedBox(height: 8),
+          Container(
+            decoration: BoxDecoration(color: Colors.grey.shade50, borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.grey.shade200)),
+            child: TextField(
+              controller: _titleController,
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+              decoration: InputDecoration(hintText: '标题写在这里...', border: InputBorder.none, contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12), hintStyle: TextStyle(color: Colors.grey.shade400)),
+            ),
+          ),
+          const SizedBox(height: 28),
+
+          // --- 模块 2：主标签 ---
+          if (primaryTags.isNotEmpty) ...[
+            const Text('第一步：选择主版块 (必选 1 个)', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.black54)),
+            const SizedBox(height: 12),
+            _buildTagGroup(primaryTags),
+          ],
+
+          // --- 模块 3：次级标签 (选中主标签后带动画弹开) ---
+          AnimatedSize(
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeInOutCubic,
+            child: (hasSelectedPrimary && secondaryTags.isNotEmpty) ? Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const SizedBox(height: 12),
+                const Divider(height: 1),
+                const SizedBox(height: 24),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('第二步：附加话题 (最多选 2 个)', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.black54)),
+                    // 贴心设计：如果用户不想选次级标签，可以直接点跳过拉出正文框
+                    if (!_hasRevealedEditor)
+                      InkWell(
+                        onTap: () => setState(() => _hasRevealedEditor = true),
+                        child: Text('跳过，直接写正文', style: TextStyle(fontSize: 13, color: Theme.of(context).colorScheme.primary, fontWeight: FontWeight.w600)),
+                      )
+                  ],
+                ),
+                const SizedBox(height: 12),
+                _buildTagGroup(secondaryTags),
+              ],
+            ) : const SizedBox(width: double.infinity),
+          ),
+        ],
+
+        // --- 模块 4：正文编辑框 (触发条件后带动画弹开) ---
+        AnimatedSize(
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeInOutCubic,
+          child: _hasRevealedEditor ? Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (!isReply && !isEdit) ...[
+                const SizedBox(height: 12),
+                const Divider(height: 1),
+                const SizedBox(height: 24),
+                const Text('第三步：编写正文', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.black54)),
+                const SizedBox(height: 12),
+              ],
+              Container(
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.grey.shade300)
+                ),
+                child: TextField(
+                  controller: _contentController,
+                  minLines: 12, // 保证它具有足够高的初始触控面积
+                  maxLines: null, // 无限向下延伸
+                  style: const TextStyle(fontSize: 16, height: 1.6),
+                  decoration: InputDecoration(
+                    hintText: '分享你的想法 (支持 Markdown 语法)...',
+                    border: InputBorder.none,
+                    contentPadding: const EdgeInsets.all(16),
+                    hintStyle: TextStyle(color: Colors.grey.shade400),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 60), // 给底部留足留白，防止被键盘遮挡
+            ],
+          ) : const SizedBox(width: double.infinity),
+        ),
+      ],
+    );
+  }
+
+  // [告别紧凑：高颜值卡片化区块引擎]
+  Widget _buildTagGroup(List<FlarumTag> tags) {
+    final parentTags = tags.where((t) => !t.isChild).toList();
+    final orphanChildren = tags.where((t) => t.isChild && !parentTags.any((p) => p.id == t.parentId)).toList();
+
+    List<Widget> columns = [];
+    for (final parent in parentTags) {
+      final children = tags.where((t) => t.isChild && t.parentId == parent.id).toList();
+      columns.add(
+        Container(
+          width: double.infinity,
+          margin: const EdgeInsets.only(bottom: 12),
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: Colors.grey.shade50, // 微浅灰底色
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.grey.shade200)
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildTagChip(parent),
+              if (children.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(left: 12, top: 12),
+                  child: Wrap(
+                    spacing: 12, // 加大横向间距
+                    runSpacing: 12, // 加大纵向间距
+                    children: children.map((c) => _buildTagChip(c)).toList(),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      );
+    }
+    
+    if (orphanChildren.isNotEmpty) {
+      columns.add(
+        Wrap(
+          spacing: 12,
+          runSpacing: 12,
+          children: orphanChildren.map((c) => _buildTagChip(c)).toList(),
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: columns,
+    );
+  }
+
+  Widget _buildTagChip(FlarumTag tag) {
+    final isSelected = _selectedTags.contains(tag);
+    return FilterChip(
+      label: Text(tag.name, style: const TextStyle(fontSize: 14)),
+      selected: isSelected,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8), // 增加触摸面积
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8), side: BorderSide(color: isSelected ? Colors.transparent : Colors.grey.shade300)),
+      backgroundColor: Colors.white,
+      selectedColor: Theme.of(context).colorScheme.primaryContainer,
+      checkmarkColor: Theme.of(context).colorScheme.primary,
+      onSelected: (val) => _handleTagSelection(tag, val),
     );
   }
 
@@ -313,103 +485,6 @@ class _EditorPageState extends State<EditorPage> {
           ),
         ),
       ),
-    );
-  }
-
-  // [核心重构：发帖页面的树状组合排版引擎]
-  Widget _buildTagGroup(List<FlarumTag> tags) {
-    // 分离出父标签，以及找不到父亲的“孤儿标签”兜底
-    final parentTags = tags.where((t) => !t.isChild).toList();
-    final orphanChildren = tags.where((t) => t.isChild && !parentTags.any((p) => p.id == t.parentId)).toList();
-
-    List<Widget> columns = [];
-    for (final parent in parentTags) {
-      final children = tags.where((t) => t.isChild && t.parentId == parent.id).toList();
-      columns.add(
-        Container(
-          margin: const EdgeInsets.only(bottom: 12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _buildTagChip(parent),
-              // 如果它下面有子标签，在下面用小间距渲染一层嵌套的 Wrap
-              if (children.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(left: 16, top: 8),
-                  child: Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: children.map((c) => _buildTagChip(c)).toList(),
-                  ),
-                ),
-            ],
-          ),
-        ),
-      );
-    }
-    
-    if (orphanChildren.isNotEmpty) {
-      columns.add(
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: orphanChildren.map((c) => _buildTagChip(c)).toList(),
-        ),
-      );
-    }
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: columns,
-    );
-  }
-
-  Widget _buildHeader() {
-    if (_isLoadingTags) return const Padding(padding: EdgeInsets.all(24), child: Center(child: CircularProgressIndicator()));
-    final primaryTags = _tags.where((t) => t.isPrimary).toList();
-    final secondaryTags = _tags.where((t) => !t.isPrimary).toList();
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          child: TextField(
-            controller: _titleController,
-            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            decoration: InputDecoration(hintText: '请输入标题...', border: InputBorder.none, hintStyle: TextStyle(color: Colors.grey.shade400)),
-          ),
-        ),
-        if (_tags.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (primaryTags.isNotEmpty) ...[
-                  Text('主标签 (必须且只能选 1 个)', style: TextStyle(fontSize: 12, color: Colors.grey.shade500, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 8),
-                  _buildTagGroup(primaryTags), // 引入嵌套排版引擎
-                ],
-                if (secondaryTags.isNotEmpty) ...[
-                  const SizedBox(height: 16),
-                  Text('次级标签 (最多选 2 个)', style: TextStyle(fontSize: 12, color: Colors.grey.shade500, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 8),
-                  _buildTagGroup(secondaryTags), // 引入嵌套排版引擎
-                ],
-              ],
-            ),
-          ),
-      ],
-    );
-  }
-
-  Widget _buildTagChip(FlarumTag tag) {
-    final isSelected = _selectedTags.contains(tag);
-    return FilterChip(
-      label: Text(tag.name),
-      selected: isSelected,
-      onSelected: (val) => _handleTagSelection(tag, val),
     );
   }
 }
