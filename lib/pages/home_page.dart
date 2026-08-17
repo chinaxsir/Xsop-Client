@@ -295,6 +295,50 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     );
   }
 
+  // [核心重构]：用树状排版渲染侧边栏，完美实现父子嵌套
+  List<Widget> _buildTagTree(List<FlarumTag> tags, ColorScheme scheme) {
+    List<Widget> items = [];
+    
+    // 找出所有顶层的父标签
+    final parentTags = tags.where((t) => !t.isChild).toList();
+    
+    for (final parent in parentTags) {
+       items.add(_buildDrawerItem(
+          iconColor: _parseColor(parent.color) ?? scheme.primary,
+          title: parent.name,
+          isSelected: _selectedTagSlug == parent.slug,
+          onTap: () => _selectTag(parent.slug),
+          indentLevel: 0,
+       ));
+       
+       // 找出挂靠在这个父标签下的所有子标签
+       final children = tags.where((t) => t.isChild && t.parentId == parent.id).toList();
+       for (final child in children) {
+          items.add(_buildDrawerItem(
+            iconColor: _parseColor(child.color) ?? scheme.primary,
+            title: child.name,
+            isSelected: _selectedTagSlug == child.slug,
+            onTap: () => _selectTag(child.slug),
+            indentLevel: 1, // 向右缩进
+          ));
+       }
+    }
+    
+    // 兜底防御：万一 Flarum 传过来的数据坏了，某个子标签找不到爹，我们就把它单拎出来
+    final orphanChildren = tags.where((t) => t.isChild && !parentTags.any((p) => p.id == t.parentId)).toList();
+    for (final orphan in orphanChildren) {
+       items.add(_buildDrawerItem(
+          iconColor: _parseColor(orphan.color) ?? scheme.primary,
+          title: orphan.name,
+          isSelected: _selectedTagSlug == orphan.slug,
+          onTap: () => _selectTag(orphan.slug),
+          indentLevel: 0,
+       ));
+    }
+    
+    return items;
+  }
+
   Widget _buildDrawer() {
     final scheme = Theme.of(context).colorScheme;
     final primaryTags = _allTags.where((t) => t.isPrimary).toList();
@@ -325,6 +369,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     title: '全部',
                     isSelected: _selectedTagSlug == null,
                     onTap: () => _selectTag(null),
+                    indentLevel: 0,
                   ),
                   const Padding(
                     padding: EdgeInsets.symmetric(vertical: 8),
@@ -335,26 +380,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                       padding: const EdgeInsets.only(left: 16, top: 8, bottom: 8),
                       child: Text('主标签', style: TextStyle(fontSize: 12, color: Colors.grey.shade500, fontWeight: FontWeight.bold)),
                     ),
-                    for (final tag in primaryTags)
-                      _buildDrawerItem(
-                        iconColor: _parseColor(tag.color) ?? scheme.primary,
-                        title: tag.name,
-                        isSelected: _selectedTagSlug == tag.slug,
-                        onTap: () => _selectTag(tag.slug),
-                      ),
+                    ..._buildTagTree(primaryTags, scheme), // 接入树状排版
                   ],
                   if (secondaryTags.isNotEmpty) ...[
                     Padding(
                       padding: const EdgeInsets.only(left: 16, top: 16, bottom: 8),
                       child: Text('次级标签', style: TextStyle(fontSize: 12, color: Colors.grey.shade500, fontWeight: FontWeight.bold)),
                     ),
-                    for (final tag in secondaryTags)
-                      _buildDrawerItem(
-                        iconColor: _parseColor(tag.color) ?? scheme.primary,
-                        title: tag.name,
-                        isSelected: _selectedTagSlug == tag.slug,
-                        onTap: () => _selectTag(tag.slug),
-                      ),
+                    ..._buildTagTree(secondaryTags, scheme), // 接入树状排版
                   ],
                   if (_allTags.isEmpty)
                     const Padding(
@@ -375,20 +408,28 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     required String title,
     required bool isSelected,
     required VoidCallback onTap,
+    required int indentLevel,
   }) {
     return Container(
-      margin: const EdgeInsets.only(bottom: 4),
+      // [缩进核心]：根据是第几层级，自动向右平移
+      margin: EdgeInsets.only(bottom: 4, left: indentLevel * 24.0),
       decoration: BoxDecoration(
         color: isSelected ? Colors.grey.withOpacity(0.08) : Colors.transparent,
         borderRadius: BorderRadius.circular(8),
       ),
       child: ListTile(
-        leading: Icon(Icons.label_important, color: iconColor, size: 22),
+        // 如果是子标签，换成“折角箭头”图标
+        leading: Icon(
+          indentLevel > 0 ? Icons.subdirectory_arrow_right : Icons.label_important, 
+          color: iconColor, 
+          size: indentLevel > 0 ? 18 : 22
+        ),
         title: Text(
           title, 
           style: TextStyle(
             fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
             color: isSelected ? Colors.black87 : Colors.black54,
+            fontSize: indentLevel > 0 ? 14 : 15, // 子标签字体略小一点
           )
         ),
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
