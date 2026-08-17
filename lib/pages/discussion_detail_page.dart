@@ -199,13 +199,13 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
          return AlertDialog(
            backgroundColor: Colors.white,
            surfaceTintColor: Colors.transparent,
-           title: const Text('互动详情'),
+           title: const Text('点赞详情'),
            content: Column(
              mainAxisSize: MainAxisSize.min,
              children: [
                ListTile(
                  leading: const Icon(Icons.thumb_up, color: Colors.green),
-                 title: const Text('支持 / 获赞数'),
+                 title: const Text('获赞数'),
                  trailing: Text('$upvotes', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Colors.green)),
                ),
              ]
@@ -232,7 +232,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
             return AlertDialog(
               backgroundColor: Colors.white,
               surfaceTintColor: Colors.transparent,
-              title: const Row(children: [Icon(Icons.warning_amber, color: Colors.redAccent), SizedBox(width: 8), Text('下发违规警告')]),
+              title: const Row(children: [Icon(Icons.warning_amber, color: Colors.redAccent), SizedBox(width: 8), Text('警告用户')]),
               content: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -242,7 +242,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                     const SizedBox(height: 6),
                     TextField(controller: strikesCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(border: OutlineInputBorder(), isDense: true)),
                     const SizedBox(height: 16),
-                    const Text('用户批注。为什么警告？（对用户可见）', style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.bold)),
+                    const Text('用户批注（对用户可见）', style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 6),
                     TextField(controller: publicCtrl, maxLines: 3, decoration: const InputDecoration(border: OutlineInputBorder())),
                   ],
@@ -375,10 +375,8 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
     }
   }
   
-  Widget _buildPayBlock(Map<String, dynamic> attrs) {
-    final payAmount = attrs['payAmount']?.toString() ?? '1';
-    final buyersCount = attrs['paidUsersCount']?.toString() ?? attrs['buyersCount']?.toString() ?? '0';
-    
+  // [核心绘制组件]：1:1 完美还原网页端的红色虚线支付框
+  Widget _buildPayBlock(String payAmount, String buyersCount) {
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 8),
       padding: const EdgeInsets.all(16),
@@ -505,12 +503,48 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
         final bool canEdit = attrs['canEdit'] == true;
         final bool canDelete = attrs['canDelete'] == true;
         
-        final isPayProtected = htmlContent.isEmpty && (
-           rawContent.contains('[pay') || 
-           rawContent.contains('付费可见') ||
-           attrs['isPay'] == true || 
-           attrs['payAmount'] != null
-        );
+        // --- [核心修复：绝杀级付费门槛探测引擎] ---
+        bool isPayProtected = false;
+        String payAmount = '1';
+        String buyersCount = '0';
+
+        // 1. 尝试从服务端下发的高级属性中提取金额和购买人数
+        if (attrs['payAmount'] != null) payAmount = attrs['payAmount'].toString();
+        if (attrs['paidUsersCount'] != null) buyersCount = attrs['paidUsersCount'].toString();
+        if (attrs['buyersCount'] != null) buyersCount = attrs['buyersCount'].toString();
+
+        // 2. 利用正则探查 Markdown 源码中的 [pay] 标签
+        final payRegex = RegExp(r'\[(pay|charge)[^\]]*\]');
+        if (payRegex.hasMatch(rawContent)) {
+            // 如果存在标签，顺便把隐藏在标签里的金额扣出来（例如 [pay amount=10]）
+            final amtMatch = RegExp(r'(amount|charge)=([0-9.]+)').firstMatch(rawContent);
+            if (amtMatch != null) {
+                payAmount = amtMatch.group(2)!;
+            }
+            
+            // 3. 鉴定当前用户是否具备查看权限
+            if (_currentUser == null) {
+                // 如果是游客（未登录），则 100% 无法查看，强制触发红色虚线购买框
+                isPayProtected = true; 
+            } else if (_currentUser!.id != userIdStr) {
+                // 如果已登录但不是原帖作者：
+                // 如果服务端为了防泄漏，彻底清空了 html，或者 html 里仅包含 "付费"、"购买" 等警告词
+                final plainText = htmlContent.replaceAll(RegExp(r'<[^>]*>'), '').trim();
+                if (plainText.isEmpty || plainText.contains('付费阅读') || plainText.contains('付费可见') || plainText.contains('购买')) {
+                    isPayProtected = true;
+                }
+                // 极个别插件会在属性里明确告诉客户端该用户是否已购买
+                if (attrs['hasPaid'] == true || attrs['isPaid'] == true) {
+                    isPayProtected = false;
+                }
+            }
+        } 
+        // 4. 备用兜底：即便没有 [pay] 标签，但服务器在属性里明确宣示了这是一篇付费帖
+        else if (attrs['isPay'] == true || (attrs['payAmount'] != null && attrs['hasPaid'] != true)) {
+            if (_currentUser == null || _currentUser!.id != userIdStr) {
+                isPayProtected = true;
+            }
+        }
 
         return Container(
           color: Colors.white,
@@ -547,8 +581,9 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
               ),
               const SizedBox(height: 12),
               
+              // [分叉渲染]：如果是锁定状态，渲染我们手搓的红色虚线购买框；如果是解锁状态，正常渲染文字
               if (isPayProtected) 
-                 _buildPayBlock(attrs)
+                 _buildPayBlock(payAmount, buyersCount)
               else 
                  HtmlWidget(htmlContent, textStyle: const TextStyle(fontSize: 16, height: 1.6, color: Colors.black87)),
                  
@@ -596,7 +631,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                     },
                     itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
                       const PopupMenuItem<String>(value: 'tip', child: Row(children: [Icon(Icons.card_giftcard, size: 18, color: Colors.orange), SizedBox(width: 8), Text('打赏')])),
-                      const PopupMenuItem<String>(value: 'vote', child: Row(children: [Icon(Icons.how_to_vote_outlined, size: 18, color: Colors.blueAccent), SizedBox(width: 8), Text('互动详情')])),
+                      const PopupMenuItem<String>(value: 'vote', child: Row(children: [Icon(Icons.how_to_vote_outlined, size: 18, color: Colors.blueAccent), SizedBox(width: 8), Text('点赞详情')])),
                       
                       if (canEdit) const PopupMenuItem<String>(value: 'edit', child: Row(children: [Icon(Icons.edit_outlined, size: 18), SizedBox(width: 8), Text('编辑')])),
                       if (_canWarnUser) const PopupMenuItem<String>(value: 'warn', child: Row(children: [Icon(Icons.info_outline, size: 18, color: Colors.redAccent), SizedBox(width: 8), Text('警告')])),
@@ -614,6 +649,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
   }
 }
 
+// 用于绘制 Flarum 网页版相同的红色虚线边框
 class _DashedBorderPainter extends CustomPainter {
   final Color color;
   _DashedBorderPainter({required this.color});
