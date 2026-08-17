@@ -44,7 +44,11 @@ class FlarumTag {
   final bool isPrimary; 
   final int? position; 
   final bool canStartDiscussion;
-  final String? template; // [核心修复：新增模板字段支撑发帖模板功能]
+  final String? template; 
+  
+  // [核心修复：新增树状结构关键标识，彻底解决子标签平铺乱序问题]
+  final bool isChild;
+  final String? parentId;
 
   FlarumTag({
     required this.id,
@@ -56,6 +60,8 @@ class FlarumTag {
     this.position,
     this.canStartDiscussion = true,
     this.template,
+    this.isChild = false,
+    this.parentId,
   });
 }
 
@@ -153,6 +159,7 @@ List<FlarumTag> parseTags(Map<String, dynamic> json) {
   final data = json['data'] as List<dynamic>? ?? [];
   return data.map((item) {
     final attrs = item['attributes'] ?? {};
+    final rels = item['relationships'] ?? {};
     
     final pos = attrs['position'];
     bool isPrimary = false;
@@ -171,8 +178,11 @@ List<FlarumTag> parseTags(Map<String, dynamic> json) {
       isPrimary: isPrimary,
       position: pos is int ? pos : int.tryParse(pos?.toString() ?? ''),
       canStartDiscussion: attrs['canStartDiscussion'] ?? true,
-      // [核心修复：深度嗅探解析插件携带的模板字段]
       template: attrs['discussionTemplate']?.toString() ?? attrs['template']?.toString(),
+      
+      // [核心修复：深度嗅探解析子标签标识和父节点关联 ID]
+      isChild: attrs['isChild'] == true,
+      parentId: rels['parent']?['data']?['id']?.toString(),
     );
   }).toList();
 }
@@ -223,6 +233,7 @@ DiscussionList parseDiscussionList(Map<String, dynamic> json, String baseUrl) {
       );
     } else if (item['type'] == 'tags') {
       final attrs = item['attributes'] ?? {};
+      final rels = item['relationships'] ?? {};
       final pos = attrs['position'];
       bool isPrimary = false;
       if (pos is int) isPrimary = true;
@@ -234,6 +245,8 @@ DiscussionList parseDiscussionList(Map<String, dynamic> json, String baseUrl) {
         slug: attrs['slug'] ?? '',
         color: attrs['color'],
         isPrimary: isPrimary,
+        isChild: attrs['isChild'] == true,
+        parentId: rels['parent']?['data']?['id']?.toString(),
       );
     }
   }
