@@ -28,7 +28,12 @@ class ApiClient {
         }
         handler.next(options);
       },
-      onError: (DioException e, handler) {
+      onError: (DioException e, handler) async {
+        // [全局拦截机制]：如果服务端明确返回 401 (Unauthorized) 鉴权失效
+        // 立刻清理本地 Token，防止出现“明明过期了却还显示头像”的幽灵状态
+        if (e.response?.statusCode == 401) {
+          await logout();
+        }
         handler.next(e);
       }
     ));
@@ -53,6 +58,11 @@ class ApiClient {
     final response = await _dio.post('/api/token', data: {
       'identification': identification,
       'password': password,
+      // [致命 Bug 彻底修复]：Flarum 原生 API Token 默认存活时间仅有可怜的 3600 秒（1小时）。
+      // 必须在这里强制传入 lifetime 参数索要超长效 Token（31536000秒 = 1年）。
+      // 否则 1 小时后服务器销毁 Token，APP 就会被静默降级为“游客”，导致标签和板块大面积丢失！
+      'lifetime': 31536000, 
+      'remember': true, 
     });
     final data = _asMap(response.data);
     final token = data['token'] as String?;
@@ -125,38 +135,40 @@ class ApiClient {
     await _dio.post('/api/warnings', data: data);
   }
 
-  // [深刻修复：打赏接口强力兼容！]
   Future<void> tipPost(int postId, int amount) async {
-    // 根据 Flarum Antoine/Money 插件的标准 JSON:API 格式构造请求
-    try {
-      await _dio.post('/api/posts/$postId/tip', data: {
-        "data": {
-          "attributes": {"amount": amount}
-        }
-      });
-      return;
-    } catch (e) {
-      // 备用兜底路由 1：全扁平化
-      try {
-        await _dio.post('/api/posts/$postId/tip', data: {"amount": amount});
-        return;
-      } catch (_) {}
-      
-      // 备用兜底路由 2：通过 tips 专用入口
-      try {
-        await _dio.post('/api/tips', data: {
-          "data": {
-            "type": "tips",
-            "attributes": {"amount": amount},
-            "relationships": {"post": {"data": {"type": "posts", "id": postId.toString()}}}
+    final endpoints = [
+      '/api/posts/$postId/tip', 
+      '/api/posts/$postId/reward', 
+      '/api/tips',
+      '/api/rewards',
+      '/api/money-transfers'
+    ];
+    
+    for (final ep in endpoints) {
+      final payloads = [
+        {"data": {"type": "tips", "attributes": {"amount": amount}, "relationships": {"post": {"data": {"type": "posts", "id": postId.toString()}}}}},
+        {"data": {"type": "rewards", "attributes": {"amount": amount}, "relationships": {"post": {"data": {"type": "posts", "id": postId.toString()}}}}},
+        {"data": {"type": "post_tips", "attributes": {"amount": amount}, "relationships": {"post": {"data": {"type": "posts", "id": postId.toString()}}}}},
+        {"data": {"attributes": {"amount": amount}}},
+        {"amount": amount},
+        {"money": amount}
+      ];
+      for (final p in payloads) {
+        try {
+          await _dio.post(ep, data: p);
+          return;
+        } on DioException catch (e) {
+          final code = e.response?.statusCode;
+          if (code == 422 || code == 403 || code == 500) {
+             throw e; 
           }
-        });
-        return;
-      } catch (finalError) {
-        // 如果全崩了，抛出最后一个报错让前端提示
-        throw finalError;
+          if (code == 404 || code == 405) {
+             break;
+          }
+        }
       }
     }
+    throw Exception('未匹配到有效的底层打赏接口，或余额校验失败。');
   }
 
   Future<void> reportPost(int postId, String reason, String? detail) async {
@@ -176,8 +188,9 @@ class ApiClient {
 
   Future<Map<String, String>?> uploadFile(String filePath, {String? filename}) async {
     String name = filename ?? filePath.split('/').last;
-    final formData = FormData();
-    formData.files.add(MapEntry('files[]', await MultipartFile.fromFile(filePath, filename: name)));
+    final formData = FormData.fromMap({
+      'files[]': await MultipartFile.fromFile(filePath, filename: name),
+    });
     
     final response = await _dio.post('/api/fof/upload', data: formData);
     final data = _asMap(response.data);
