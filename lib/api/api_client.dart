@@ -29,8 +29,6 @@ class ApiClient {
         handler.next(options);
       },
       onError: (DioException e, handler) async {
-        // [全局拦截机制]：如果服务端明确返回 401 (Unauthorized) 鉴权失效
-        // 立刻清理本地 Token，防止出现“明明过期了却还显示头像”的幽灵状态
         if (e.response?.statusCode == 401) {
           await logout();
         }
@@ -58,9 +56,6 @@ class ApiClient {
     final response = await _dio.post('/api/token', data: {
       'identification': identification,
       'password': password,
-      // [致命 Bug 彻底修复]：Flarum 原生 API Token 默认存活时间仅有可怜的 3600 秒（1小时）。
-      // 必须在这里强制传入 lifetime 参数索要超长效 Token（31536000秒 = 1年）。
-      // 否则 1 小时后服务器销毁 Token，APP 就会被静默降级为“游客”，导致标签和板块大面积丢失！
       'lifetime': 31536000, 
       'remember': true, 
     });
@@ -135,6 +130,33 @@ class ApiClient {
     await _dio.post('/api/warnings', data: data);
   }
 
+  // [新增核心修复：自动轮询探测 Flarum 付费阅读插件的扣款路由]
+  Future<void> buyPost(int postId) async {
+    final endpoints = [
+      '/api/posts/$postId/pay', 
+      '/api/posts/$postId/buy', 
+      '/api/posts/$postId/purchase'
+    ];
+    
+    for (final ep in endpoints) {
+      try {
+        await _dio.post(ep, data: {"data": {}});
+        return;
+      } on DioException catch (e) {
+        final code = e.response?.statusCode;
+        // 如果是 422 余额不足，403 没权限，说明路由是对的，直接抛出异常
+        if (code == 422 || code == 403 || code == 500) {
+           throw e; 
+        }
+        // 如果 404 或 405，说明当前插件不是这个路由，继续试探下一个
+        if (code == 404 || code == 405) {
+           continue;
+        }
+      }
+    }
+    throw Exception('当前系统未安装适配的购买插件，或该接口已被隐藏。');
+  }
+
   Future<void> tipPost(int postId, int amount) async {
     final endpoints = [
       '/api/posts/$postId/tip', 
@@ -168,7 +190,7 @@ class ApiClient {
         }
       }
     }
-    throw Exception('未匹配到有效的底层打赏接口，或余额校验失败。');
+    throw Exception('当前系统未安装适配的打赏插件，或该接口已被隐藏。');
   }
 
   Future<void> reportPost(int postId, String reason, String? detail) async {
