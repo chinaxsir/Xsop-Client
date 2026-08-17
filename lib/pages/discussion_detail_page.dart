@@ -375,8 +375,8 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
     }
   }
   
-  // 核心绘制组件：1:1 完美还原网页端的红色虚线支付框
-  Widget _buildPayBlock(String payAmount, String buyersCount) {
+  // [新增核心能力：应用内弹出确认，并直接完成底层扣款解锁]
+  Widget _buildPayBlock(String payAmount, String buyersCount, int postId) {
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 8),
       padding: const EdgeInsets.all(16),
@@ -416,8 +416,79 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 0),
                              minimumSize: const Size(80, 36),
                            ),
-                           onPressed: () {
-                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请前往网页版进行购买')));
+                           // 绑定完整的 APP 内购买闭环流程
+                           onPressed: () async {
+                              final isLoggedIn = await widget.api.isLoggedIn;
+                              if (!isLoggedIn) {
+                                _promptLogin();
+                                return;
+                              }
+                              
+                              if (!mounted) return;
+                              showDialog(
+                                context: context,
+                                builder: (ctx) {
+                                  bool isSubmitting = false;
+                                  return StatefulBuilder(
+                                    builder: (ctx, setStateDialog) {
+                                      return AlertDialog(
+                                        backgroundColor: Colors.white,
+                                        surfaceTintColor: Colors.transparent,
+                                        title: const Text('购买付费内容', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+                                        content: Text('确认花费 $payAmount XSD 购买该隐藏内容吗？'),
+                                        actions: [
+                                          TextButton(
+                                            onPressed: () => Navigator.pop(ctx),
+                                            child: const Text('取消', style: TextStyle(color: Colors.grey)),
+                                          ),
+                                          FilledButton(
+                                            style: FilledButton.styleFrom(backgroundColor: const Color(0xFF526D85)),
+                                            onPressed: isSubmitting ? null : () async {
+                                              setStateDialog(() => isSubmitting = true);
+                                              try {
+                                                await widget.api.buyPost(postId);
+                                                if (mounted) {
+                                                  Navigator.pop(ctx); // 关闭弹窗
+                                                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('购买成功！')));
+                                                  // 购买成功后，自动让整个页面变回加载中，并重新从服务器拉取已经解锁的图文
+                                                  setState(() => _isLoading = true);
+                                                  _loadDiscussionDetail(); 
+                                                }
+                                              } on DioException catch (e) {
+                                                if (mounted) {
+                                                  String errMsg = '购买失败：余额不足或无法购买';
+                                                  try {
+                                                    final rawData = e.response?.data;
+                                                    if (rawData != null && rawData is Map) {
+                                                      if (rawData['errors'] != null && rawData['errors'] is List && rawData['errors'].isNotEmpty) {
+                                                        errMsg = rawData['errors'][0]['detail'] ?? errMsg;
+                                                      } else if (rawData['message'] != null) {
+                                                        errMsg = rawData['message'];
+                                                      }
+                                                    }
+                                                  } catch (_) {}
+                                                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg)));
+                                                  Navigator.pop(ctx);
+                                                }
+                                              } catch (e) {
+                                                if (mounted) {
+                                                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('系统异常：${e.toString()}')));
+                                                  Navigator.pop(ctx);
+                                                }
+                                              } finally {
+                                                if (mounted) setStateDialog(() => isSubmitting = false);
+                                              }
+                                            },
+                                            child: isSubmitting 
+                                              ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) 
+                                              : const Text('确认购买'),
+                                          ),
+                                        ],
+                                      );
+                                    }
+                                  );
+                                }
+                              );
                            },
                            child: const Text('购买', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
                          )
@@ -484,7 +555,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
       separatorBuilder: (context, index) => const Divider(height: 1, thickness: 0.5, color: Color(0xFFE5E5EA)),
       itemBuilder: (context, index) {
         final post = _posts[index];
-        final postId = int.parse(post['id']);
+        final postId = int.parse(post['id']); // 截取核心交互目标ID
         final attrs = post['attributes'] ?? {};
         
         final userIdStr = post['relationships']?['user']?['data']?['id']?.toString();
@@ -503,43 +574,33 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
         final bool canEdit = attrs['canEdit'] == true;
         final bool canDelete = attrs['canDelete'] == true;
         
-        // --- [核心重构：绝对真空付费探测器] ---
         bool isPayProtected = false;
         String payAmount = '1';
         String buyersCount = '0';
 
-        // 1. 抓取服务端的显式数值（兼容各路插件）
         if (attrs['payAmount'] != null) payAmount = attrs['payAmount'].toString();
         else if (attrs['price'] != null) payAmount = attrs['price'].toString();
         
         if (attrs['paidUsersCount'] != null) buyersCount = attrs['paidUsersCount'].toString();
         else if (attrs['buyersCount'] != null) buyersCount = attrs['buyersCount'].toString();
 
-        // 2. 将 HTML 剥离所有的标签（比如 <p> <div> <br>），检查是否还剩下纯文本
         String plainText = htmlContent.replaceAll(RegExp(r'<[^>]*>'), '').replaceAll('&nbsp;', '').trim();
         
-        // 核心拦截条件 A：服务端明确指示此为付费内容，且当前用户没买！
         if (attrs['isPay'] == true || attrs['payAmount'] != null || attrs['price'] != null) {
             if (attrs['hasPaid'] != true && attrs['isPaid'] != true) {
                 isPayProtected = true;
             }
         }
 
-        // 核心拦截条件 B (解决白板痛点)：Flarum 是不允许发送“空回复”的。
-        // 如果 HTML 里面没有字，也没有图片(<img)，也没有视频/外部框架(iframe)，
-        // 那 100% 是被服务端的付费或权限插件强制抹除了！毫不犹豫直接替换为付费框！
         if (plainText.isEmpty && !htmlContent.contains('<img') && !htmlContent.contains('<iframe') && !htmlContent.contains('<video')) {
             isPayProtected = true;
         }
 
-        // 核心拦截条件 C：被插件硬编码替换成了警告文本
         if (plainText.contains('付费可见') || plainText.contains('需要购买') || rawContent.contains('[pay') || rawContent.contains('[charge')) {
             isPayProtected = true;
         }
 
-        // 唯一的赦免权：如果你是帖子的作者本人，哪怕触发了上述条件，也把你的内容放行（防止作者看不到自己的付费帖）
         if (_currentUser != null && _currentUser!.id == userIdStr) {
-             // 除非服务端连作者本人的内容也一起抹除得干干净净了，那就只能保持显示付费框
              if (plainText.isNotEmpty || htmlContent.contains('<img')) {
                  isPayProtected = false;
              }
@@ -580,9 +641,9 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
               ),
               const SizedBox(height: 12),
               
-              // 关键渲染支流：触发隐藏锁就画红框，否则正常渲染
+              // [打通闭环节点] 将解析到的 postId 赋予支付弹窗拦截器
               if (isPayProtected) 
-                 _buildPayBlock(payAmount, buyersCount)
+                 _buildPayBlock(payAmount, buyersCount, postId)
               else 
                  HtmlWidget(htmlContent, textStyle: const TextStyle(fontSize: 16, height: 1.6, color: Colors.black87)),
                  
@@ -648,7 +709,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
   }
 }
 
-// 辅助绘制：红色虚线框
 class _DashedBorderPainter extends CustomPainter {
   final Color color;
   _DashedBorderPainter({required this.color});
