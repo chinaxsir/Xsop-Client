@@ -130,21 +130,38 @@ class ApiClient {
     await _dio.post('/api/warnings', data: data);
   }
 
-  // [核心防御：彻底解除 422 格式错误的提前拦截]
-  Future<void> buyPost(int postId) async {
+  // [无死角修复：引入 Discussion ID 进行广度优先交叉探测]
+  Future<void> buyPost(int postId, int discussionId) async {
     DioException? lastErr;
+    
+    // 覆盖了市面上所有主流流派（ziiven, xypp, 等）的接口形态
     final endpoints = [
+      // 1. 基于 Discussion ID 的主题流派（最容易抛出 not_found 的元凶）
+      '/api/pay-to-see/$discussionId',         
+      '/api/discussions/$discussionId/pay-to-see',
+      '/api/discussions/$discussionId/pay',
+      '/api/discussions/$discussionId/buy',
+      '/api/discussions/$discussionId/purchase',
+      '/api/pay/$discussionId',
+      
+      // 2. 基于 Post ID 的单帖流派
       '/api/pay-to-see/$postId',         
       '/api/posts/$postId/pay-to-see', 
       '/api/posts/$postId/pay',          
       '/api/posts/$postId/buy', 
       '/api/posts/$postId/purchase',
       '/api/pay/$postId',
+      
+      // 3. 通用订单流派
+      '/api/orders',
+      '/api/purchases'
     ];
     
     final payloads = [
       {"data": {"type": "posts", "id": postId.toString(), "attributes": {"pay": true}}},
+      {"data": {"type": "discussions", "id": discussionId.toString()}},
       {"data": {"type": "pay-to-see", "relationships": {"post": {"data": {"type": "posts", "id": postId.toString()}}}}},
+      {"data": {"type": "pay-to-see", "relationships": {"discussion": {"data": {"type": "discussions", "id": discussionId.toString()}}}}},
       {"data": {"attributes": {}}},
       {"data": {}},
       {}, 
@@ -158,11 +175,11 @@ class ApiClient {
         } on DioException catch (e) {
           lastErr = e;
           final code = e.response?.statusCode;
+          // 如果返回 404 或 405 说明路由或者方法不存在，跳出进行下一个路由试探
           if (code == 404 || code == 405) break; 
           
           final resStr = e.response?.data?.toString() ?? '';
-          // 只有当服务器明确吐出了“余额不足”或类似的关键字时，才说明载荷验证通过且真的没钱，立刻中断抛出真实错误！
-          // 否则（比如是 validation error），继续坚韧地探测下一个 payload！
+          // 只有明确捕捉到余额或资金验证相关的拦截词眼，才说明接口走通了，直接阻断并抛给用户
           if (resStr.contains('不足') || resStr.contains('not enough') || resStr.contains('余额') || resStr.contains('fund')) {
              throw e;
           }
@@ -171,7 +188,7 @@ class ApiClient {
     }
     
     if (lastErr != null) throw lastErr;
-    throw Exception('当前板块未侦测到有效的扣款通道路由。');
+    throw Exception('购买操作被阻断：系统未侦测到有效的底层交易通道路由。');
   }
 
   Future<void> tipPost(int postId, int amount) async {
@@ -206,7 +223,7 @@ class ApiClient {
       }
     }
     if (lastErr != null) throw lastErr;
-    throw Exception('当前板块未侦测到兼容的打赏接口。');
+    throw Exception('打赏操作被阻断：系统未侦测到兼容的交易接口。');
   }
 
   Future<void> reportPost(int postId, String reason, String? detail) async {
