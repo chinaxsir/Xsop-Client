@@ -142,7 +142,6 @@ class _UserActivityPageState extends State<UserActivityPage> {
         for (var res in results) {
           for(var i in _extractData(res['data'])) {
             if (i['id'] != null) {
-                // [核心拦截器：剔除金额为 0 的初始化幽灵数据]
                 final attrs = i['attributes'] ?? {};
                 final amtStr = attrs['amount']?.toString() ?? attrs['money']?.toString() ?? attrs['value']?.toString() ?? attrs['reward']?.toString() ?? '0';
                 final amt = double.tryParse(amtStr.replaceAll(RegExp(r'[^0-9\.\-]'), '')) ?? 0.0;
@@ -153,7 +152,6 @@ class _UserActivityPageState extends State<UserActivityPage> {
           
           for (var i in _extractData(res['included'])) {
              if (i['type'] == 'tips' || i['type'] == 'rewards' || i['type'] == 'post_tips' || i['type'] == 'moneyRewards') {
-                 // [核心拦截器：剔除金额为 0 的初始化幽灵数据]
                  final attrs = i['attributes'] ?? {};
                  final amtStr = attrs['amount']?.toString() ?? attrs['money']?.toString() ?? attrs['value']?.toString() ?? attrs['reward']?.toString() ?? '0';
                  final amt = double.tryParse(amtStr.replaceAll(RegExp(r'[^0-9\.\-]'), '')) ?? 0.0;
@@ -162,11 +160,30 @@ class _UserActivityPageState extends State<UserActivityPage> {
           }
         }
 
-        _items = uniqueMap.values.toList();
+        final List<dynamic> finalItems = [];
+        final Set<String> seenKeys = {}; 
+        
+        for (var item in uniqueMap.values) {
+           final attrs = item['attributes'] ?? {};
+           final amtStr = attrs['amount']?.toString() ?? attrs['money']?.toString() ?? attrs['value']?.toString() ?? attrs['reward']?.toString() ?? '0';
+           final amt = double.tryParse(amtStr.replaceAll(RegExp(r'[^0-9\.\-]'), '')) ?? 0.0;
+           
+           if (amt == 0.0) continue;
+
+           final timeStr = attrs['createdAt']?.toString() ?? '';
+           if (timeStr.isEmpty) continue; 
+           
+           final fingerprint = '${timeStr}_$amt';
+           if (!seenKeys.contains(fingerprint)) {
+               seenKeys.add(fingerprint);
+               finalItems.add(item);
+           }
+        }
+
+        _items = finalItems;
         _customEmptyMessage = '暂无打赏记录。';
       }
       else if (widget.activityType == 'money') {
-        // [极速优化：并发请求所有资金流水，并剔除金额为 0 的无用数据]
         final endpoints = ['/api/users/$uid/money-transactions', '/api/user-money-histories', '/api/moneyHistory', '/api/users/$uid/moneyHistory', '/api/money-transfers', '/api/transactions'];
         
         List<Future<Map<String, dynamic>>> tasks = [];
@@ -183,25 +200,38 @@ class _UserActivityPageState extends State<UserActivityPage> {
         
         for (var res in results) {
            for(var i in _extractData(res['data'])) {
-             if (i['id'] != null) {
-                 final attrs = i['attributes'] ?? {};
-                 final amtStr = attrs['amount']?.toString() ?? attrs['money']?.toString() ?? attrs['balance_delta']?.toString() ?? '0';
-                 final amt = double.tryParse(amtStr.replaceAll(RegExp(r'[^0-9\.\-]'), '')) ?? 0.0;
-                 if (amt != 0.0) uniqueMap[i['id'].toString()] = i;
-             }
+             if (i['id'] != null) uniqueMap[i['id'].toString()] = i;
            }
            _included.addAll(_extractData(res['included']));
            
            for (var i in _extractData(res['included'])) {
                if (i['type'] == 'moneyHistory' || i['type'] == 'user-money-histories' || i['type'] == 'transactions' || i['type'] == 'moneyTransactions') {
-                   final attrs = i['attributes'] ?? {};
-                   final amtStr = attrs['amount']?.toString() ?? attrs['money']?.toString() ?? attrs['balance_delta']?.toString() ?? '0';
-                   final amt = double.tryParse(amtStr.replaceAll(RegExp(r'[^0-9\.\-]'), '')) ?? 0.0;
-                   if (amt != 0.0) uniqueMap[i['id'].toString()] = i;
+                   uniqueMap[i['id'].toString()] = i;
                }
            }
         }
-        _items = uniqueMap.values.toList();
+
+        final List<dynamic> finalItems = [];
+        final Set<String> seenKeys = {}; 
+        
+        for (var item in uniqueMap.values) {
+           final attrs = item['attributes'] ?? {};
+           final amtStr = attrs['amount']?.toString() ?? attrs['money']?.toString() ?? attrs['balance_delta']?.toString() ?? '0';
+           final amt = double.tryParse(amtStr.replaceAll(RegExp(r'[^0-9\.\-]'), '')) ?? 0.0;
+           
+           if (amt == 0.0) continue;
+           
+           final timeStr = attrs['createdAt']?.toString() ?? '';
+           if (timeStr.isEmpty) continue; 
+           
+           final fingerprint = '${timeStr}_$amt';
+           if (!seenKeys.contains(fingerprint)) {
+               seenKeys.add(fingerprint);
+               finalItems.add(item);
+           }
+        }
+        
+        _items = finalItems;
         _customEmptyMessage = '暂无资金明细。';
       }
 
