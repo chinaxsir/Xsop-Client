@@ -130,10 +130,9 @@ class ApiClient {
     await _dio.post('/api/warnings', data: data);
   }
 
-  // [绝杀修复：购买接口矩阵，绝对不提前中止试探]
+  // [核心防御：彻底解除 422 格式错误的提前拦截]
   Future<void> buyPost(int postId) async {
     DioException? lastErr;
-    
     final endpoints = [
       '/api/pay-to-see/$postId',         
       '/api/posts/$postId/pay-to-see', 
@@ -143,9 +142,9 @@ class ApiClient {
       '/api/pay/$postId',
     ];
     
-    // 按优先级排列载荷：优先提供最完整的标准 JSON:API 格式，防止误触发 422 格式错误
     final payloads = [
-      {"data": {"type": "posts", "id": postId.toString()}},
+      {"data": {"type": "posts", "id": postId.toString(), "attributes": {"pay": true}}},
+      {"data": {"type": "pay-to-see", "relationships": {"post": {"data": {"type": "posts", "id": postId.toString()}}}}},
       {"data": {"attributes": {}}},
       {"data": {}},
       {}, 
@@ -155,27 +154,26 @@ class ApiClient {
       for (final p in payloads) {
         try {
           await _dio.post(ep, data: p);
-          return; // 只要有一次返回 200，立刻宣告购买成功！
+          return; 
         } on DioException catch (e) {
           lastErr = e;
           final code = e.response?.statusCode;
-          // 如果路由不存在，换下一个路由
-          if (code == 404 || code == 405) {
-             break; 
+          if (code == 404 || code == 405) break; 
+          
+          final resStr = e.response?.data?.toString() ?? '';
+          // 只有当服务器明确吐出了“余额不足”或类似的关键字时，才说明载荷验证通过且真的没钱，立刻中断抛出真实错误！
+          // 否则（比如是 validation error），继续坚韧地探测下一个 payload！
+          if (resStr.contains('不足') || resStr.contains('not enough') || resStr.contains('余额') || resStr.contains('fund')) {
+             throw e;
           }
-          // [关键变更]：哪怕遇到 422，也绝不立刻 throw e！
-          // 因为这个 422 极大概率是因为当前的 payload 不符合插件胃口。
-          // 我们要继续忍着报错，把剩下的 payload 全部试完！
         }
       }
     }
     
-    // 只有当所有路由、所有 payload 全部碰壁后，才把最后一次的真实报错抛出
     if (lastErr != null) throw lastErr;
     throw Exception('当前板块未侦测到有效的扣款通道路由。');
   }
 
-  // [同步修复打赏接口：解除 422 提前阻断机制]
   Future<void> tipPost(int postId, int amount) async {
     DioException? lastErr;
     final endpoints = [
@@ -203,10 +201,7 @@ class ApiClient {
         } on DioException catch (e) {
           lastErr = e;
           final code = e.response?.statusCode;
-          if (code == 404 || code == 405) {
-             break;
-          }
-          // 同理，忍住 422 格式错误，继续探针试探
+          if (code == 404 || code == 405) break;
         }
       }
     }
