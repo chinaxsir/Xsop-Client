@@ -12,9 +12,9 @@ class ApiClient {
 
   ApiClient({this.baseUrl = 'https://xsop.de'}) : _dio = Dio(BaseOptions(
     baseUrl: baseUrl,
-    connectTimeout: const Duration(seconds: 15),
-    receiveTimeout: const Duration(seconds: 20),
-    sendTimeout: const Duration(seconds: 15),
+    connectTimeout: const Duration(seconds: 10),
+    receiveTimeout: const Duration(seconds: 15),
+    sendTimeout: const Duration(seconds: 10),
     headers: {
       'Content-Type': 'application/json',
       'Accept': 'application/json',
@@ -130,67 +130,61 @@ class ApiClient {
     await _dio.post('/api/warnings', data: data);
   }
 
-  // [无死角修复：引入 Discussion ID 进行广度优先交叉探测]
+  // [极速重构：砍掉冗余盲测，直击靶心，实现毫秒级响应]
   Future<void> buyPost(int postId, int discussionId) async {
     DioException? lastErr;
     
-    // 覆盖了市面上所有主流流派（ziiven, xypp, 等）的接口形态
+    // 按国内 Flarum 站长的使用习惯与流行度对路由进行优先级排序
     final endpoints = [
-      // 1. 基于 Discussion ID 的主题流派（最容易抛出 not_found 的元凶）
-      '/api/pay-to-see/$discussionId',         
-      '/api/discussions/$discussionId/pay-to-see',
+      '/api/pay-to-read/$postId',                 // 热门：付费阅读 (单帖)
+      '/api/pay-to-read/$discussionId',           // 热门：付费阅读 (主题)
+      '/api/pay-to-see/$postId',                  // 经典：付费可见 (单帖)
+      '/api/pay-to-see/$discussionId',            // 经典：付费可见 (主题)
+      '/api/posts/$postId/pay-to-read',
+      '/api/discussions/$discussionId/pay-to-read',
+      '/api/posts/$postId/pay',
       '/api/discussions/$discussionId/pay',
-      '/api/discussions/$discussionId/buy',
-      '/api/discussions/$discussionId/purchase',
-      '/api/pay/$discussionId',
-      
-      // 2. 基于 Post ID 的单帖流派
-      '/api/pay-to-see/$postId',         
-      '/api/posts/$postId/pay-to-see', 
-      '/api/posts/$postId/pay',          
-      '/api/posts/$postId/buy', 
       '/api/posts/$postId/purchase',
-      '/api/pay/$postId',
-      
-      // 3. 通用订单流派
-      '/api/orders',
-      '/api/purchases'
+      '/api/posts/$postId/buy',
     ];
     
-    final payloads = [
-      {"data": {"type": "posts", "id": postId.toString(), "attributes": {"pay": true}}},
-      {"data": {"type": "discussions", "id": discussionId.toString()}},
-      {"data": {"type": "pay-to-see", "relationships": {"post": {"data": {"type": "posts", "id": postId.toString()}}}}},
-      {"data": {"type": "pay-to-see", "relationships": {"discussion": {"data": {"type": "discussions", "id": discussionId.toString()}}}}},
-      {"data": {"attributes": {}}},
-      {"data": {}},
-      {}, 
-    ];
+    // 舍弃笨重的多重 Payload 组合，统一使用 Flarum 官方 action 通用规范，避免引发额外格式验证错误
+    final payload = {"data": {}};
 
     for (final ep in endpoints) {
-      for (final p in payloads) {
-        try {
-          await _dio.post(ep, data: p);
-          return; 
-        } on DioException catch (e) {
-          lastErr = e;
-          final code = e.response?.statusCode;
-          // 如果返回 404 或 405 说明路由或者方法不存在，跳出进行下一个路由试探
-          if (code == 404 || code == 405) break; 
-          
-          final resStr = e.response?.data?.toString() ?? '';
-          // 只有明确捕捉到余额或资金验证相关的拦截词眼，才说明接口走通了，直接阻断并抛给用户
-          if (resStr.contains('不足') || resStr.contains('not enough') || resStr.contains('余额') || resStr.contains('fund')) {
-             throw e;
-          }
+      try {
+        await _dio.post(ep, data: payload);
+        return; // 秒扣款成功！
+      } on DioException catch (e) {
+        lastErr = e;
+        final code = e.response?.statusCode;
+        final resStr = e.response?.data?.toString() ?? '';
+
+        // [拦截器防御]：如果返回 404 (没这个路由) 或 405 (不支持POST)，立刻极速跳过，不浪费一毫秒
+        if (code == 404 || code == 405 || resStr.contains('not_found')) {
+           continue; 
         }
+
+        // 如果服务器返回了 422 且包含余额不足、没有足够资金等字样，说明路由撞对了！立刻阻断并抛出！
+        if (resStr.contains('不足') || 
+            resStr.contains('not enough') || 
+            resStr.contains('余额') || 
+            resStr.contains('fund') || 
+            resStr.contains('insufficient') || 
+            code == 403) {
+           throw e;
+        }
+        
+        // 其他情况 (比如 500)，大概率也是撞对路由了但插件内部出错，抛出真实原因
+        throw e;
       }
     }
     
     if (lastErr != null) throw lastErr;
-    throw Exception('购买操作被阻断：系统未侦测到有效的底层交易通道路由。');
+    throw Exception('购买被阻断：未能匹配到正确的付费路由，请检查后端插件是否开启 API 支持。');
   }
 
+  // [打赏接口同步进行极速减负优化]
   Future<void> tipPost(int postId, int amount) async {
     DioException? lastErr;
     final endpoints = [
@@ -198,16 +192,13 @@ class ApiClient {
       '/api/posts/$postId/reward', 
       '/api/tips',
       '/api/rewards',
-      '/api/money-transfers'
     ];
     
+    // 保留打赏必备的属性格式，其他全砍
     final payloads = [
       {"data": {"type": "tips", "attributes": {"amount": amount}, "relationships": {"post": {"data": {"type": "posts", "id": postId.toString()}}}}},
-      {"data": {"type": "rewards", "attributes": {"amount": amount}, "relationships": {"post": {"data": {"type": "posts", "id": postId.toString()}}}}},
-      {"data": {"type": "post_tips", "attributes": {"amount": amount}, "relationships": {"post": {"data": {"type": "posts", "id": postId.toString()}}}}},
       {"data": {"attributes": {"amount": amount}}},
       {"amount": amount},
-      {"money": amount}
     ];
 
     for (final ep in endpoints) {
@@ -218,12 +209,12 @@ class ApiClient {
         } on DioException catch (e) {
           lastErr = e;
           final code = e.response?.statusCode;
-          if (code == 404 || code == 405) break;
+          if (code == 404 || code == 405) break; 
         }
       }
     }
     if (lastErr != null) throw lastErr;
-    throw Exception('打赏操作被阻断：系统未侦测到兼容的交易接口。');
+    throw Exception('打赏操作被阻断：未匹配到有效的 API 接口。');
   }
 
   Future<void> reportPost(int postId, String reason, String? detail) async {
