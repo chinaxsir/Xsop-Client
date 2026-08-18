@@ -81,7 +81,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
       });
     } catch (e) {
       setState(() {
-        _error = '无法加载帖子详情，请检查网络';
+        _error = '无法加载帖子详情，请检查网络环境。';
         _isLoading = false;
       });
     }
@@ -143,7 +143,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                   onPressed: isSubmitting ? null : () async {
                     final amount = int.tryParse(amountController.text.trim());
                     if (amount == null || amount <= 0) {
-                       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请输入有效金额')));
+                       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请输入有效金额。')));
                        return;
                     }
                     setStateDialog(() => isSubmitting = true);
@@ -155,7 +155,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                       }
                     } on DioException catch (e) {
                       if (mounted) {
-                         String errMsg = '打赏失败：余额不足或不支持该动作';
+                         String errMsg = '打赏被拦截：余额不足或操作受限。';
                          try {
                            final rawData = e.response?.data;
                            if (rawData != null && rawData is Map) {
@@ -267,7 +267,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('警告下发成功！')));
                       }
                     } on DioException catch (e) {
-                       String errMsg = '权限不足，警告下发失败';
+                       String errMsg = '权限不足，警告下发被拦截。';
                        try {
                          final errs = e.response?.data['errors'];
                          if (errs != null && errs is List && errs.isNotEmpty && errs[0]['detail'] != null) {
@@ -315,7 +315,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
           _posts[index]['attributes']['likesCount'] = currentLikesCount;
         });
         
-        String errMsg = '点赞失败，权限不足';
+        String errMsg = '点赞被拦截，权限受限。';
         try {
           final errs = e.response?.data['errors'];
           if (errs != null && errs is List && errs.isNotEmpty && errs[0]['detail'] != null) {
@@ -335,7 +335,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('删除成功')));
       }
     } on DioException catch (e) {
-      String errMsg = '删除失败，权限不足';
+      String errMsg = '删除被拦截，权限受限。';
       try {
         final errs = e.response?.data['errors'];
         if (errs != null && errs is List && errs.isNotEmpty && errs[0]['detail'] != null) {
@@ -375,7 +375,8 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
     }
   }
   
-  Widget _buildPayBlock(String payAmount, String buyersCount, int postId) {
+  // [全面支持传入 PostID 与 DiscussionID 双维度校验]
+  Widget _buildPayBlock(String payAmount, String buyersCount, int postId, int discussionId) {
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 8),
       padding: const EdgeInsets.all(16),
@@ -443,7 +444,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                                             onPressed: isSubmitting ? null : () async {
                                               setStateDialog(() => isSubmitting = true);
                                               try {
-                                                await widget.api.buyPost(postId);
+                                                await widget.api.buyPost(postId, discussionId);
                                                 if (mounted) {
                                                   Navigator.pop(ctx); 
                                                   ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('购买成功！')));
@@ -452,8 +453,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                                                 }
                                               } on DioException catch (e) {
                                                 if (mounted) {
-                                                  // [提取真实的系统阻断原因反馈给 UI]
-                                                  String errMsg = '系统拦截：余额不足或未适配该操作';
+                                                  String errMsg = '失败原因：系统拒绝服务或未能处理。';
                                                   try {
                                                     final rawData = e.response?.data;
                                                     if (rawData != null && rawData is Map) {
@@ -470,7 +470,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                                                 }
                                               } catch (e) {
                                                 if (mounted) {
-                                                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('错误：${e.toString()}'), duration: const Duration(seconds: 4)));
+                                                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('错误拦截：${e.toString().replaceAll('Exception: ', '')}'), duration: const Duration(seconds: 4)));
                                                   Navigator.pop(ctx);
                                                 }
                                               } finally {
@@ -554,6 +554,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
       itemBuilder: (context, index) {
         final post = _posts[index];
         final postId = int.parse(post['id']);
+        final discussionId = int.parse(widget.discussion.id); // 提取父级主题ID
         final attrs = post['attributes'] ?? {};
         
         final userIdStr = post['relationships']?['user']?['data']?['id']?.toString();
@@ -640,7 +641,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
               const SizedBox(height: 12),
               
               if (isPayProtected) 
-                 _buildPayBlock(payAmount, buyersCount, postId)
+                 _buildPayBlock(payAmount, buyersCount, postId, discussionId)
               else 
                  HtmlWidget(htmlContent, textStyle: const TextStyle(fontSize: 16, height: 1.6, color: Colors.black87)),
                  
