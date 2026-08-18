@@ -130,11 +130,10 @@ class ApiClient {
     await _dio.post('/api/warnings', data: data);
   }
 
-  // [核心重构：购买接口矩阵探测，彻底终结无法购买的白板现象]
+  // [绝杀修复：购买接口矩阵，绝对不提前中止试探]
   Future<void> buyPost(int postId) async {
     DioException? lastErr;
     
-    // 覆盖了市面上 99% 的 Flarum 付费阅读插件特征路由
     final endpoints = [
       '/api/pay-to-see/$postId',         
       '/api/posts/$postId/pay-to-see', 
@@ -144,45 +143,41 @@ class ApiClient {
       '/api/pay/$postId',
     ];
     
-    // 不同插件对 Body 的严苛要求，用矩阵的方式遍历突破
+    // 按优先级排列载荷：优先提供最完整的标准 JSON:API 格式，防止误触发 422 格式错误
     final payloads = [
-      {"data": {}},
       {"data": {"type": "posts", "id": postId.toString()}},
       {"data": {"attributes": {}}},
-      {}, // 某些插件要求全空载荷
+      {"data": {}},
+      {}, 
     ];
 
     for (final ep in endpoints) {
       for (final p in payloads) {
         try {
           await _dio.post(ep, data: p);
-          return; // 200 购买成功，直接结束
+          return; // 只要有一次返回 200，立刻宣告购买成功！
         } on DioException catch (e) {
-          final code = e.response?.statusCode;
-          // 422: 通常是插件验证失败（如余额不足）
-          // 403: 服务端拒绝权限
-          // 如果是这些代码，说明“找对门了，只是兜里钱不够”，把原生错误抛给 UI！
-          if (code == 422 || code == 403 || code == 500) {
-             throw e; 
-          }
           lastErr = e;
-          // 404 / 405 表示根本没这个路由接口，不用继续测后面的 payload 了，换下一个路由
+          final code = e.response?.statusCode;
+          // 如果路由不存在，换下一个路由
           if (code == 404 || code == 405) {
              break; 
           }
-          // 其他 code (如 400 Bad Request) 说明门对了，但载荷不对，继续测试下一个 payload
+          // [关键变更]：哪怕遇到 422，也绝不立刻 throw e！
+          // 因为这个 422 极大概率是因为当前的 payload 不符合插件胃口。
+          // 我们要继续忍着报错，把剩下的 payload 全部试完！
         }
       }
     }
     
-    // 如果全部试探完毕都没有成功，把最后一次跟服务器交互的真实错误抛给 UI 页面去提取文字
-    if (lastErr != null) {
-       throw lastErr;
-    }
+    // 只有当所有路由、所有 payload 全部碰壁后，才把最后一次的真实报错抛出
+    if (lastErr != null) throw lastErr;
     throw Exception('当前板块未侦测到有效的扣款通道路由。');
   }
 
+  // [同步修复打赏接口：解除 422 提前阻断机制]
   Future<void> tipPost(int postId, int amount) async {
+    DioException? lastErr;
     final endpoints = [
       '/api/posts/$postId/tip', 
       '/api/posts/$postId/reward', 
@@ -191,30 +186,31 @@ class ApiClient {
       '/api/money-transfers'
     ];
     
+    final payloads = [
+      {"data": {"type": "tips", "attributes": {"amount": amount}, "relationships": {"post": {"data": {"type": "posts", "id": postId.toString()}}}}},
+      {"data": {"type": "rewards", "attributes": {"amount": amount}, "relationships": {"post": {"data": {"type": "posts", "id": postId.toString()}}}}},
+      {"data": {"type": "post_tips", "attributes": {"amount": amount}, "relationships": {"post": {"data": {"type": "posts", "id": postId.toString()}}}}},
+      {"data": {"attributes": {"amount": amount}}},
+      {"amount": amount},
+      {"money": amount}
+    ];
+
     for (final ep in endpoints) {
-      final payloads = [
-        {"data": {"type": "tips", "attributes": {"amount": amount}, "relationships": {"post": {"data": {"type": "posts", "id": postId.toString()}}}}},
-        {"data": {"type": "rewards", "attributes": {"amount": amount}, "relationships": {"post": {"data": {"type": "posts", "id": postId.toString()}}}}},
-        {"data": {"type": "post_tips", "attributes": {"amount": amount}, "relationships": {"post": {"data": {"type": "posts", "id": postId.toString()}}}}},
-        {"data": {"attributes": {"amount": amount}}},
-        {"amount": amount},
-        {"money": amount}
-      ];
       for (final p in payloads) {
         try {
           await _dio.post(ep, data: p);
           return;
         } on DioException catch (e) {
+          lastErr = e;
           final code = e.response?.statusCode;
-          if (code == 422 || code == 403 || code == 500) {
-             throw e; 
-          }
           if (code == 404 || code == 405) {
              break;
           }
+          // 同理，忍住 422 格式错误，继续探针试探
         }
       }
     }
+    if (lastErr != null) throw lastErr;
     throw Exception('当前板块未侦测到兼容的打赏接口。');
   }
 
