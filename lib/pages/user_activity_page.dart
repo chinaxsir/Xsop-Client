@@ -39,6 +39,17 @@ class _UserActivityPageState extends State<UserActivityPage> {
     _loadData();
   }
 
+  // [新增防御工具]：兼容某些插件返回奇葩整型时间戳导致崩溃的问题
+  DateTime? _parseFlexibleDate(String? s) {
+    if (s == null || s.trim().isEmpty || s == 'null') return null;
+    final num = int.tryParse(s);
+    if (num != null) {
+      if (s.length == 10) return DateTime.fromMillisecondsSinceEpoch(num * 1000);
+      return DateTime.fromMillisecondsSinceEpoch(num);
+    }
+    return DateTime.tryParse(s);
+  }
+
   Future<Map<String, dynamic>> _safeFetch(String endpoint, Map<String, dynamic> query) async {
     try {
       return await widget.api.getDynamicList(endpoint, queryParameters: query);
@@ -141,46 +152,47 @@ class _UserActivityPageState extends State<UserActivityPage> {
         final Map<String, dynamic> uniqueMap = {};
         for (var res in results) {
           for(var i in _extractData(res['data'])) {
-            if (i['id'] != null) {
-                final attrs = i['attributes'] ?? {};
-                final amtStr = attrs['amount']?.toString() ?? attrs['money']?.toString() ?? attrs['value']?.toString() ?? attrs['reward']?.toString() ?? '0';
-                final amt = double.tryParse(amtStr.replaceAll(RegExp(r'[^0-9\.\-]'), '')) ?? 0.0;
-                if (amt != 0.0) uniqueMap[i['id'].toString()] = i;
-            }
+            if (i['id'] != null) uniqueMap[i['id'].toString()] = i;
           }
           _included.addAll(_extractData(res['included']));
-          
           for (var i in _extractData(res['included'])) {
              if (i['type'] == 'tips' || i['type'] == 'rewards' || i['type'] == 'post_tips' || i['type'] == 'moneyRewards') {
-                 final attrs = i['attributes'] ?? {};
-                 final amtStr = attrs['amount']?.toString() ?? attrs['money']?.toString() ?? attrs['value']?.toString() ?? attrs['reward']?.toString() ?? '0';
-                 final amt = double.tryParse(amtStr.replaceAll(RegExp(r'[^0-9\.\-]'), '')) ?? 0.0;
-                 if (amt != 0.0) uniqueMap[i['id'].toString()] = i;
+                 uniqueMap[i['id'].toString()] = i;
              }
           }
         }
 
-        final List<dynamic> finalItems = [];
-        final Set<String> seenKeys = {}; 
+        // [核心杀招：同一分钟内产生的幽灵去重融合算法]
+        final Map<String, dynamic> finalItemsMap = {};
         
         for (var item in uniqueMap.values) {
            final attrs = item['attributes'] ?? {};
            final amtStr = attrs['amount']?.toString() ?? attrs['money']?.toString() ?? attrs['value']?.toString() ?? attrs['reward']?.toString() ?? '0';
            final amt = double.tryParse(amtStr.replaceAll(RegExp(r'[^0-9\.\-]'), '')) ?? 0.0;
            
-           if (amt == 0.0) continue;
+           if (amt == 0.0) continue; // 剔除 0 元注册初始化数据
 
            final timeStr = attrs['createdAt']?.toString() ?? '';
-           if (timeStr.isEmpty) continue; 
+           final parsedDate = _parseFlexibleDate(timeStr);
+           if (parsedDate == null) continue; // 剔除时间损坏的底层流水账
            
-           final fingerprint = '${timeStr}_$amt';
-           if (!seenKeys.contains(fingerprint)) {
-               seenKeys.add(fingerprint);
-               finalItems.add(item);
+           // 将时间精度卡到分钟，生成指纹：比如 "28934509_1.0"
+           final timeKey = parsedDate.millisecondsSinceEpoch ~/ 60000;
+           final fingerprint = '${timeKey}_$amt';
+
+           if (!finalItemsMap.containsKey(fingerprint)) {
+               finalItemsMap[fingerprint] = item;
+           } else {
+               // 如果指纹发生冲突，优先保留带有“打赏人/被赏人”关系节点的完整数据！踢掉残缺的流水！
+               final existingRels = finalItemsMap[fingerprint]['relationships'] as Map?;
+               final currentRels = item['relationships'] as Map?;
+               if ((existingRels == null || existingRels.isEmpty) && currentRels != null && currentRels.isNotEmpty) {
+                   finalItemsMap[fingerprint] = item;
+               }
            }
         }
 
-        _items = finalItems;
+        _items = finalItemsMap.values.toList();
         _customEmptyMessage = '暂无打赏记录。';
       }
       else if (widget.activityType == 'money') {
@@ -203,7 +215,6 @@ class _UserActivityPageState extends State<UserActivityPage> {
              if (i['id'] != null) uniqueMap[i['id'].toString()] = i;
            }
            _included.addAll(_extractData(res['included']));
-           
            for (var i in _extractData(res['included'])) {
                if (i['type'] == 'moneyHistory' || i['type'] == 'user-money-histories' || i['type'] == 'transactions' || i['type'] == 'moneyTransactions') {
                    uniqueMap[i['id'].toString()] = i;
@@ -211,8 +222,8 @@ class _UserActivityPageState extends State<UserActivityPage> {
            }
         }
 
-        final List<dynamic> finalItems = [];
-        final Set<String> seenKeys = {}; 
+        // 资金流水页面执行同样的去重算法
+        final Map<String, dynamic> finalItemsMap = {};
         
         for (var item in uniqueMap.values) {
            final attrs = item['attributes'] ?? {};
@@ -222,16 +233,18 @@ class _UserActivityPageState extends State<UserActivityPage> {
            if (amt == 0.0) continue;
            
            final timeStr = attrs['createdAt']?.toString() ?? '';
-           if (timeStr.isEmpty) continue; 
+           final parsedDate = _parseFlexibleDate(timeStr);
+           if (parsedDate == null) continue;
            
-           final fingerprint = '${timeStr}_$amt';
-           if (!seenKeys.contains(fingerprint)) {
-               seenKeys.add(fingerprint);
-               finalItems.add(item);
+           final timeKey = parsedDate.millisecondsSinceEpoch ~/ 60000;
+           final fingerprint = '${timeKey}_$amt';
+
+           if (!finalItemsMap.containsKey(fingerprint)) {
+               finalItemsMap[fingerprint] = item;
            }
         }
         
-        _items = finalItems;
+        _items = finalItemsMap.values.toList();
         _customEmptyMessage = '暂无资金明细。';
       }
 
@@ -239,11 +252,9 @@ class _UserActivityPageState extends State<UserActivityPage> {
         _items.sort((a, b) {
           final timeAStr = a['attributes']?['createdAt']?.toString();
           final timeBStr = b['attributes']?['createdAt']?.toString();
-          DateTime dateA = DateTime.fromMillisecondsSinceEpoch(0);
-          DateTime dateB = DateTime.fromMillisecondsSinceEpoch(0);
-          if (timeAStr != null) { try { dateA = DateTime.parse(timeAStr); } catch (_) {} }
-          if (timeBStr != null) { try { dateB = DateTime.parse(timeBStr); } catch (_) {} }
-          return dateB.compareTo(dateA);
+          final dtA = _parseFlexibleDate(timeAStr) ?? DateTime.fromMillisecondsSinceEpoch(0);
+          final dtB = _parseFlexibleDate(timeBStr) ?? DateTime.fromMillisecondsSinceEpoch(0);
+          return dtB.compareTo(dtA);
         });
       }
 
@@ -596,6 +607,17 @@ class _TipItemWidgetState extends State<_TipItemWidget> {
   String _timeDisplay = '未知';
   String? _balance;
 
+  // 使用与外层相同的修复解析器，解决时间格式不合规导致的“未知”现象
+  DateTime? _parseFlexibleDate(String? s) {
+    if (s == null || s.trim().isEmpty || s == 'null') return null;
+    final num = int.tryParse(s);
+    if (num != null) {
+      if (s.length == 10) return DateTime.fromMillisecondsSinceEpoch(num * 1000);
+      return DateTime.fromMillisecondsSinceEpoch(num);
+    }
+    return DateTime.tryParse(s);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -616,8 +638,9 @@ class _TipItemWidgetState extends State<_TipItemWidget> {
     _balance = attrs['balance']?.toString() ?? attrs['currentBalance']?.toString();
     
     final timeStr = attrs['createdAt']?.toString();
-    if (timeStr != null) {
-      try { _timeDisplay = formatRelativeTime(DateTime.parse(timeStr)); } catch (_) {}
+    final parsedDate = _parseFlexibleDate(timeStr);
+    if (parsedDate != null) {
+      try { _timeDisplay = formatRelativeTime(parsedDate); } catch (_) {}
     }
 
     final postId = widget.item['relationships']?['post']?['data']?['id']?.toString() ?? attrs['postId']?.toString();
