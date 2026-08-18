@@ -375,7 +375,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
     }
   }
   
-  // 核心支付组件
   Widget _buildPayBlock(String payAmount, String buyersCount, int postId) {
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 8),
@@ -453,23 +452,25 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                                                 }
                                               } on DioException catch (e) {
                                                 if (mounted) {
-                                                  String errMsg = '购买失败：余额不足或无法购买';
+                                                  // [提取真实的系统阻断原因反馈给 UI]
+                                                  String errMsg = '系统拦截：余额不足或未适配该操作';
                                                   try {
                                                     final rawData = e.response?.data;
                                                     if (rawData != null && rawData is Map) {
                                                       if (rawData['errors'] != null && rawData['errors'] is List && rawData['errors'].isNotEmpty) {
-                                                        errMsg = rawData['errors'][0]['detail'] ?? errMsg;
+                                                        final errDetail = rawData['errors'][0]['detail'] ?? rawData['errors'][0]['code'];
+                                                        if (errDetail != null) errMsg = '失败原因: $errDetail';
                                                       } else if (rawData['message'] != null) {
-                                                        errMsg = rawData['message'];
+                                                        errMsg = '失败原因: ${rawData['message']}';
                                                       }
                                                     }
                                                   } catch (_) {}
-                                                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg)));
+                                                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg), duration: const Duration(seconds: 4)));
                                                   Navigator.pop(ctx);
                                                 }
                                               } catch (e) {
                                                 if (mounted) {
-                                                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('系统异常：${e.toString()}')));
+                                                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('错误：${e.toString()}'), duration: const Duration(seconds: 4)));
                                                   Navigator.pop(ctx);
                                                 }
                                               } finally {
