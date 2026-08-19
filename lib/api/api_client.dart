@@ -80,7 +80,6 @@ class ApiClient {
     return _asMap(response.data);
   }
 
-  // [修复核心：还原 Flarum 标准包含字段，解决 400 Bad Request 导致无法进入帖子的问题]
   Future<Map<String, dynamic>> getDiscussion(int id, {int page = 1, int pageSize = 20}) async {
     final response = await _dio.get('/api/discussions/$id', queryParameters: {
       'page[number]': page, 
@@ -144,9 +143,8 @@ class ApiClient {
     return '';
   }
 
-  Future<void> buyPost(List<String> possibleIds) async {
-    DioException? lastErr;
-    
+  // [系统机制优化：智能路由锁定与防覆盖控制]
+  Future<void> buyPost(List<String> possibleIds, int discussionId, int postId) async {
     final routeTemplates = [
       '/api/paytoread/{id}',
       '/api/pay-to-read/{id}',
@@ -162,50 +160,69 @@ class ApiClient {
     final payloads = [
       {"data": {}},
       {"data": {"type": "paytoread", "attributes": {}}},
+      {"data": {"type": "pay-to-read", "attributes": {}}},
+      {"data": {"attributes": {"pay": true}}},
+      {"data": {"relationships": {"discussion": {"data": {"type": "discussions", "id": discussionId.toString()}}}}},
     ];
 
     for (final tmpl in routeTemplates) {
-      bool isRouteValid = true;
-
       for (final id in possibleIds) {
         final ep = tmpl.replaceAll('{id}', id);
+        bool isRouteHit = false;
+        DioException? routeErr;
 
         for (final p in payloads) {
           try {
             await _dio.post(ep, data: p);
-            return; 
+            return; // 交易成功，完成处理
           } on DioException catch (e) {
-            lastErr = e;
             final code = e.response?.statusCode;
             final errCode = _extractErrorCode(e.response?.data);
 
-            if (code == 405 || errCode == 'route_not_found' || (code == 404 && errCode != 'not_found')) {
-              isRouteValid = false;
+            // 当路由判定为无效或数据模型未定义时，中断负载注入并释放线程进行下一轮测试
+            if (code == 404 || code == 405 || errCode == 'route_not_found' || errCode == 'not_found') {
               break; 
             }
 
-            if (code == 404 || errCode == 'not_found') {
-              break; 
-            }
+            // 确立已命中有效路由，保存服务器返回的最优报错信息
+            isRouteHit = true;
+            routeErr = e;
 
             final resStr = e.response?.data?.toString() ?? '';
-            
+            // 若捕获到关键业务权限阻断代码，直接执行异常上报
             if (resStr.contains('不足') || resStr.contains('enough') || resStr.contains('余额') || resStr.contains('fund') || code == 403) {
               throw e; 
             }
           }
         }
         
-        if (!isRouteValid) break; 
+        // 若已命中有效接口且存在服务拒绝响应，直接抛出阻拦异常，严禁向后覆盖
+        if (isRouteHit && routeErr != null) {
+          throw routeErr;
+        }
       }
     }
     
-    if (lastErr != null) throw lastErr;
-    throw Exception('API_ROUTE_UNMATCHED: 探针未能击穿后台路由。');
+    // 启用全局兜底探测，适用于忽略节点 ID 参数的特殊接口
+    final noIdEndpoints = ['/api/paytoread', '/api/pay-to-read', '/api/paytosee', '/api/pay-to-see'];
+    for(final ep in noIdEndpoints) {
+       for(final p in payloads) {
+          try {
+            await _dio.post(ep, data: p);
+            return;
+          } on DioException catch (e) {
+             final code = e.response?.statusCode;
+             if (code == 404 || code == 405) break;
+             throw e;
+          }
+       }
+    }
+
+    throw Exception('API_ROUTE_UNMATCHED: 服务器拒绝响应，路由匹配流程异常。');
   }
 
+  // [同步优化打赏接口的系统稳定性]
   Future<void> tipPost(int postId, int amount) async {
-    DioException? lastErr;
     final endpoints = [
       '/api/posts/$postId/tip', 
       '/api/posts/$postId/reward', 
@@ -221,23 +238,33 @@ class ApiClient {
 
     for (final ep in endpoints) {
       bool routeExists = false;
+      DioException? routeErr;
+
       for (final p in payloads) {
         try {
           await _dio.post(ep, data: p);
           return;
         } on DioException catch (e) {
-          lastErr = e;
           final code = e.response?.statusCode;
           final errCode = _extractErrorCode(e.response?.data);
           
           if (code == 404 || code == 405 || errCode == 'route_not_found' || errCode == 'not_found') {
-             routeExists = false;
              break; 
           }
+
           routeExists = true;
+          routeErr = e;
+
+          final resStr = e.response?.data?.toString() ?? '';
+          if (resStr.contains('不足') || resStr.contains('enough') || resStr.contains('余额') || resStr.contains('fund') || code == 403) {
+             throw e;
+          }
         }
       }
-      if (routeExists && lastErr != null) throw lastErr;
+      
+      if (routeExists && routeErr != null) {
+         throw routeErr;
+      }
     }
     
     throw Exception('API_ROUTE_UNMATCHED');
