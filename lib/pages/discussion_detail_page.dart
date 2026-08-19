@@ -85,10 +85,23 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
         _isLoading = false;
       });
     } catch (e) {
-      setState(() {
-        _error = '无法加载帖子详情，请检查网络环境。';
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          // [排错强化] 以后如果碰到打不开帖子的情况，直接把底层阻拦我们的 HTTP 错误码和提示显示在屏幕正中！
+          if (e is DioException) {
+            String msg = '接口调用受阻 (HTTP ${e.response?.statusCode})';
+            try {
+              if (e.response?.data != null) {
+                 msg += '\n\n服务器返回详情:\n${e.response?.data}';
+              }
+            } catch (_) {}
+            _error = msg;
+          } else {
+            _error = '未知错误：${e.toString()}';
+          }
+          _isLoading = false;
+        });
+      }
     }
   }
 
@@ -550,7 +563,32 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
 
   Widget _buildBody() {
     if (_isLoading) return const Center(child: CircularProgressIndicator());
-    if (_error != null) return Center(child: Text(_error!));
+    if (_error != null) {
+      return Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Icon(Icons.warning_amber_rounded, size: 64, color: Colors.red.shade300),
+              const SizedBox(height: 16),
+              Text('发生致命异常', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.red.shade800)),
+              const SizedBox(height: 12),
+              SelectableText(_error!, style: TextStyle(fontSize: 13, color: Colors.grey.shade700, fontFamily: 'monospace')),
+              const SizedBox(height: 24),
+              FilledButton.tonal(
+                onPressed: () {
+                  setState(() { _isLoading = true; _error = null; });
+                  _loadDiscussionDetail();
+                }, 
+                child: const Text('尝试重新加载')
+              ),
+            ],
+          ),
+        )
+      );
+    }
 
     return ListView.separated(
       padding: EdgeInsets.zero,
