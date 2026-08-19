@@ -143,9 +143,9 @@ class ApiClient {
     return '';
   }
 
-  // [系统机制优化：智能路由锁定与防覆盖控制]
+  // [购买探针重构：精准识别 route_not_found 与 not_found 的差别]
   Future<void> buyPost(List<String> possibleIds, int discussionId, int postId) async {
-    final routeTemplates = [
+    final templates = [
       '/api/paytoread/{id}',
       '/api/pay-to-read/{id}',
       '/api/ziiven/paytoread/{id}',
@@ -153,76 +153,66 @@ class ApiClient {
       '/api/pay-to-see/{id}',
       '/api/discussions/{id}/pay',
       '/api/posts/{id}/pay',
-      '/api/discussions/{id}/paytoread',
-      '/api/posts/{id}/paytoread',
     ];
 
-    final payloads = [
-      {"data": {}},
-      {"data": {"type": "paytoread", "attributes": {}}},
-      {"data": {"type": "pay-to-read", "attributes": {}}},
-      {"data": {"attributes": {"pay": true}}},
-      {"data": {"relationships": {"discussion": {"data": {"type": "discussions", "id": discussionId.toString()}}}}},
-    ];
+    DioException? bestErr;
 
-    for (final tmpl in routeTemplates) {
-      for (final id in possibleIds) {
-        final ep = tmpl.replaceAll('{id}', id);
-        bool isRouteHit = false;
-        DioException? routeErr;
+    for (var tmpl in templates) {
+      bool routeExists = false;
 
-        for (final p in payloads) {
-          try {
-            await _dio.post(ep, data: p);
-            return; // 交易成功，完成处理
-          } on DioException catch (e) {
-            final code = e.response?.statusCode;
-            final errCode = _extractErrorCode(e.response?.data);
+      for (var id in possibleIds) {
+         final ep = tmpl.replaceAll('{id}', id);
+         try {
+           await _dio.post(ep, data: {"data": {}});
+           return; // 购买成功
+         } on DioException catch (e) {
+           final errCode = _extractErrorCode(e.response?.data);
+           final code = e.response?.statusCode;
 
-            // 当路由判定为无效或数据模型未定义时，中断负载注入并释放线程进行下一轮测试
-            if (code == 404 || code == 405 || errCode == 'route_not_found' || errCode == 'not_found') {
-              break; 
-            }
+           // 1. 如果路由压根不存在，直接跳过当前模板，去测下一个网址格式
+           if (code == 404 && errCode == 'route_not_found') {
+             routeExists = false;
+             break; 
+           }
+           if (code == 405) {
+             routeExists = false;
+             break;
+           }
 
-            // 确立已命中有效路由，保存服务器返回的最优报错信息
-            isRouteHit = true;
-            routeErr = e;
+           // 2. 只要没被上面拦截，说明网址找对了！保存最优报错信息
+           routeExists = true;
+           bestErr = e;
 
-            final resStr = e.response?.data?.toString() ?? '';
-            // 若捕获到关键业务权限阻断代码，直接执行异常上报
-            if (resStr.contains('不足') || resStr.contains('enough') || resStr.contains('余额') || resStr.contains('fund') || code == 403) {
-              throw e; 
-            }
-          }
-        }
-        
-        // 若已命中有效接口且存在服务拒绝响应，直接抛出阻拦异常，严禁向后覆盖
-        if (isRouteHit && routeErr != null) {
-          throw routeErr;
-        }
+           // 3. 如果报 422 格式错误，尝试用 Flarum 标准包裹格式再请求一次
+           if (code == 422 || errCode == 'validation_error') {
+               try {
+                  await _dio.post(ep, data: {"data": {"type": "paytoread", "attributes": {}}});
+                  return;
+               } on DioException catch (e2) {
+                  bestErr = e2;
+               }
+           }
+
+           // 4. 如果服务器明确返回了诸如 403 (余额不足) 这种真实的业务错误，不再测了，直接抛出！
+           if (errCode != 'not_found' && code != 404 && code != 422) {
+              throw bestErr!;
+           }
+           
+           // 5. 如果是 not_found (404)，说明网址对了，但当前尝试的 ID 不对。代码会继续 for 循环，尝试传入下一个 ID！
+         }
+      }
+
+      // 如果这个路由是真实存在的，且我们把所有疑似 ID 都试了一遍依然不成功，那就直接把真实的错误（比如 not_found）抛给界面
+      if (routeExists && bestErr != null) {
+         throw bestErr;
       }
     }
-    
-    // 启用全局兜底探测，适用于忽略节点 ID 参数的特殊接口
-    final noIdEndpoints = ['/api/paytoread', '/api/pay-to-read', '/api/paytosee', '/api/pay-to-see'];
-    for(final ep in noIdEndpoints) {
-       for(final p in payloads) {
-          try {
-            await _dio.post(ep, data: p);
-            return;
-          } on DioException catch (e) {
-             final code = e.response?.statusCode;
-             if (code == 404 || code == 405) break;
-             throw e;
-          }
-       }
-    }
 
-    throw Exception('API_ROUTE_UNMATCHED: 服务器拒绝响应，路由匹配流程异常。');
+    throw Exception('未匹配到有效的购买接口，请确认后端插件已启用 API 支持。');
   }
 
-  // [同步优化打赏接口的系统稳定性]
   Future<void> tipPost(int postId, int amount) async {
+    DioException? bestErr;
     final endpoints = [
       '/api/posts/$postId/tip', 
       '/api/posts/$postId/reward', 
@@ -238,8 +228,6 @@ class ApiClient {
 
     for (final ep in endpoints) {
       bool routeExists = false;
-      DioException? routeErr;
-
       for (final p in payloads) {
         try {
           await _dio.post(ep, data: p);
@@ -248,26 +236,29 @@ class ApiClient {
           final code = e.response?.statusCode;
           final errCode = _extractErrorCode(e.response?.data);
           
-          if (code == 404 || code == 405 || errCode == 'route_not_found' || errCode == 'not_found') {
+          if (code == 404 && errCode == 'route_not_found') {
+             routeExists = false;
              break; 
+          }
+          if (code == 405) {
+             routeExists = false;
+             break;
           }
 
           routeExists = true;
-          routeErr = e;
+          bestErr = e;
 
-          final resStr = e.response?.data?.toString() ?? '';
-          if (resStr.contains('不足') || resStr.contains('enough') || resStr.contains('余额') || resStr.contains('fund') || code == 403) {
+          if (code == 422 || errCode == 'validation_error') continue;
+
+          if (errCode != 'not_found' && code != 404) {
              throw e;
           }
         }
       }
-      
-      if (routeExists && routeErr != null) {
-         throw routeErr;
-      }
+      if (routeExists && bestErr != null) throw bestErr;
     }
     
-    throw Exception('API_ROUTE_UNMATCHED');
+    throw Exception('未匹配到有效的打赏接口。');
   }
 
   Future<void> reportPost(int postId, String reason, String? detail) async {
