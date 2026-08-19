@@ -29,7 +29,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
   List<dynamic> _posts = [];
   Map<String, dynamic> _usersMap = {};
   
-  // [关键：保存原始数据用于深度嗅探 PayNode ID]
   Map<String, dynamic> _discussionData = {};
   List<dynamic> _included = [];
   
@@ -378,8 +377,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
     }
   }
   
-  // 核心支持传入 PayNodeId 以突破 Ziiven 的特殊校验
-  Widget _buildPayBlock(String payAmount, String buyersCount, int postId, int discussionId, String? payNodeId) {
+  Widget _buildPayBlock(String payAmount, String buyersCount, List<String> possibleIds) {
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 8),
       padding: const EdgeInsets.all(16),
@@ -447,7 +445,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                                             onPressed: isSubmitting ? null : () async {
                                               setStateDialog(() => isSubmitting = true);
                                               try {
-                                                await widget.api.buyPost(postId, discussionId, payNodeId);
+                                                await widget.api.buyPost(possibleIds);
                                                 if (mounted) {
                                                   Navigator.pop(ctx); 
                                                   ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('购买成功！')));
@@ -460,7 +458,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                                                   final eStr = e.toString();
 
                                                   if (eStr.contains('API_ROUTE_UNMATCHED')) {
-                                                     errMsg = '未能命中付费插件接口 (节点嗅探: ${payNodeId ?? "无"})，请检查后台路由。';
+                                                     errMsg = '未能命中付费插件接口 (已深层嗅探 ID 弹药库: ${possibleIds.join(",")})，请检查后台路由设置。';
                                                   } else if (e is DioException) {
                                                      try {
                                                        final rawData = e.response?.data;
@@ -580,29 +578,36 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
         final bool canEdit = attrs['canEdit'] == true;
         final bool canDelete = attrs['canDelete'] == true;
         
-        // [绝杀引擎：嗅探深层的 PayNode ID]
-        String? payNodeId;
-        final pRels = post['relationships'] ?? {};
-        final dRels = _discussionData['relationships'] ?? {};
-
-        for (var key in ['payToRead', 'pay-to-read', 'payToSee', 'pay-to-see', 'paytoread']) {
-          if (pRels[key]?['data'] is Map) {
-            payNodeId = pRels[key]['data']['id']?.toString();
-            break;
-          }
-          if (dRels[key]?['data'] is Map) {
-            payNodeId = dRels[key]['data']['id']?.toString();
-            break;
-          }
+        // [极度暴力的弹药库填装：深度挖掘所有的 ID]
+        Set<String> possibleIds = {postId.toString(), discussionId.toString()};
+        
+        // 1. 从关系表中深挖
+        for (var rels in [post['relationships'] ?? {}, _discussionData['relationships'] ?? {}]) {
+           rels.forEach((key, value) {
+              if (key.toLowerCase().contains('pay')) {
+                 if (value is Map && value['data'] is Map && value['data']['id'] != null) {
+                    possibleIds.add(value['data']['id'].toString());
+                 }
+              }
+           });
         }
-        if (payNodeId == null) {
-          for (var inc in _included) {
-            final t = inc['type'];
-            if (t == 'pay-to-read' || t == 'pay-to-see' || t == 'paytoread') {
-              payNodeId = inc['id'].toString();
-              break;
-            }
-          }
+        
+        // 2. 从游离节点 (included) 中挖掘
+        for (var inc in _included) {
+           final t = inc['type']?.toString().toLowerCase() ?? '';
+           if (t.contains('pay')) {
+              possibleIds.add(inc['id'].toString());
+           }
+        }
+        
+        // 3. 从所有可能被插件隐藏的底层属性中挖掘
+        for (var at in [attrs, _discussionData['attributes'] ?? {}]) {
+           at.forEach((key, value) {
+              if (key.toLowerCase().contains('id') || key.toLowerCase().contains('pay')) {
+                 if (value is int) possibleIds.add(value.toString());
+                 if (value is String && int.tryParse(value) != null) possibleIds.add(value);
+              }
+           });
         }
         
         bool isPayProtected = false;
@@ -673,7 +678,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
               const SizedBox(height: 12),
               
               if (isPayProtected) 
-                 _buildPayBlock(payAmount, buyersCount, postId, discussionId, payNodeId) // 发送嗅探到的节点
+                 _buildPayBlock(payAmount, buyersCount, possibleIds.toList()) 
               else 
                  HtmlWidget(htmlContent, textStyle: const TextStyle(fontSize: 16, height: 1.6, color: Colors.black87)),
                  
