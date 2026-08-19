@@ -80,12 +80,12 @@ class ApiClient {
     return _asMap(response.data);
   }
 
-  // [修改点 1：强行要求服务器暴露出 payToRead 和 paytoread 关联模型]
+  // [修复核心：还原 Flarum 标准包含字段，解决 400 Bad Request 导致无法进入帖子的问题]
   Future<Map<String, dynamic>> getDiscussion(int id, {int page = 1, int pageSize = 20}) async {
     final response = await _dio.get('/api/discussions/$id', queryParameters: {
       'page[number]': page, 
       'page[size]': pageSize, 
-      'include': 'user,posts,posts.user,payToRead,paytoread,posts.payToRead,posts.paytoread'
+      'include': 'user,posts,posts.user'
     });
     return _asMap(response.data);
   }
@@ -144,11 +144,9 @@ class ApiClient {
     return '';
   }
 
-  // [修改点 2：矩阵剪枝极速探针，自动轮换 ID 弹药库]
   Future<void> buyPost(List<String> possibleIds) async {
     DioException? lastErr;
     
-    // 我们预设所有可能被插件注册的路由模板
     final routeTemplates = [
       '/api/paytoread/{id}',
       '/api/pay-to-read/{id}',
@@ -161,7 +159,6 @@ class ApiClient {
       '/api/posts/{id}/paytoread',
     ];
 
-    // 包裹载荷格式
     final payloads = [
       {"data": {}},
       {"data": {"type": "paytoread", "attributes": {}}},
@@ -176,40 +173,33 @@ class ApiClient {
         for (final p in payloads) {
           try {
             await _dio.post(ep, data: p);
-            return; // 只要 200/201，直接判定成功并结束
+            return; 
           } on DioException catch (e) {
             lastErr = e;
             final code = e.response?.statusCode;
             final errCode = _extractErrorCode(e.response?.data);
 
-            // 【剪枝逻辑 1】：如果返回了 405 (Method Not Allowed) 或 route_not_found，说明网址都不对
-            // 直接掐断这整个模板，跳过后续所有 ID 的测试，节约大量时间！
             if (code == 405 || errCode == 'route_not_found' || (code == 404 && errCode != 'not_found')) {
               isRouteValid = false;
               break; 
             }
 
-            // 【剪枝逻辑 2】：如果返回 not_found (404)，说明路由对了，但这个 ID 在库里没有！
-            // 打断当前 payload 循环，直接换下一个 ID 去试！
             if (code == 404 || errCode == 'not_found') {
               break; 
             }
 
             final resStr = e.response?.data?.toString() ?? '';
             
-            // 【命中标靶】：只要返回信息里包含资金相关的报错，说明路由和 ID 全对上了！直接把真实错误抛出！
             if (resStr.contains('不足') || resStr.contains('enough') || resStr.contains('余额') || resStr.contains('fund') || code == 403) {
               throw e; 
             }
           }
         }
         
-        // 如果上面判定该路由模板完全无效，就结束 ID 循环，去测下一个路由模板
         if (!isRouteValid) break; 
       }
     }
     
-    // 如果全部遍历完了都没中靶，抛出错误并附带弹药库，方便核对
     if (lastErr != null) throw lastErr;
     throw Exception('API_ROUTE_UNMATCHED: 探针未能击穿后台路由。');
   }
