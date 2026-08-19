@@ -88,15 +88,15 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
       if (mounted) {
         setState(() {
           if (e is DioException) {
-            String msg = '接口调用受阻 (HTTP ${e.response?.statusCode})';
+            String msg = '加载失败 (HTTP ${e.response?.statusCode})';
             try {
               if (e.response?.data != null) {
-                 msg += '\n\n服务器反馈详情:\n${e.response?.data}';
+                 msg += '\n\n详细信息:\n${e.response?.data}';
               }
             } catch (_) {}
             _error = msg;
           } else {
-            _error = '未识别错误：${e.toString()}';
+            _error = '未知错误：${e.toString()}';
           }
           _isLoading = false;
         });
@@ -108,7 +108,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
     final post = _posts[index];
     final postId = post['id'];
     
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('系统正在调取原始数据...')));
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('正在获取内容...')));
     String rawContent = post['attributes']?['content']?.toString() ?? '';
     
     try {
@@ -147,11 +147,11 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
             return AlertDialog(
               backgroundColor: Colors.white,
               surfaceTintColor: Colors.transparent,
-              title: const Row(children: [Icon(Icons.card_giftcard, color: Colors.orange), SizedBox(width: 8), Text('下发打赏')]),
+              title: const Row(children: [Icon(Icons.card_giftcard, color: Colors.orange), SizedBox(width: 8), Text('打赏作者')]),
               content: TextField(
                 controller: amountController,
                 keyboardType: TextInputType.number,
-                decoration: const InputDecoration(hintText: '请输入目标额度 (仅支持整数)', border: OutlineInputBorder(), suffixText: 'XSD'),
+                decoration: const InputDecoration(hintText: '请输入打赏金额 (整数)', border: OutlineInputBorder(), suffixText: 'XSD'),
               ),
               actions: [
                 TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消', style: TextStyle(color: Colors.grey))),
@@ -160,7 +160,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                   onPressed: isSubmitting ? null : () async {
                     final amount = int.tryParse(amountController.text.trim());
                     if (amount == null || amount <= 0) {
-                       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('输入的额度不符合规范。')));
+                       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请输入有效金额。')));
                        return;
                     }
                     setStateDialog(() => isSubmitting = true);
@@ -168,18 +168,16 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                       await widget.api.tipPost(postId, amount);
                       if (mounted) {
                         Navigator.pop(context);
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('操作完成，已成功结算打赏记录。')));
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('打赏成功！')));
                       }
                     } catch (e) {
                       if (mounted) {
-                         String errMsg = '处理异常：服务器拒绝服务或数据异常。';
-                         if (e.toString().contains('API_ROUTE_UNMATCHED')) {
-                            errMsg = '系统异常：未能配置或激活兼容的打赏服务支持，请联系系统管理员。';
-                         } else if (e is DioException) {
+                         String errMsg = '打赏失败';
+                         if (e is DioException) {
                             try {
                                final rawData = e.response?.data;
                                if (rawData != null && rawData is Map && rawData['errors'] != null && rawData['errors'].isNotEmpty) {
-                                 errMsg = rawData['errors'][0]['detail'] ?? rawData['errors'][0]['code'];
+                                 errMsg = rawData['errors'][0]['detail'] ?? '失败原因: ${rawData['errors'][0]['code']}';
                                }
                             } catch (_) {}
                          } else {
@@ -192,7 +190,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                       if (mounted) setStateDialog(() => isSubmitting = false);
                     }
                   },
-                  child: isSubmitting ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('确认下发'),
+                  child: isSubmitting ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('确认打赏'),
                 ),
               ],
             );
@@ -213,18 +211,18 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
          return AlertDialog(
            backgroundColor: Colors.white,
            surfaceTintColor: Colors.transparent,
-           title: const Text('系统判定详情'),
+           title: const Text('点赞详情'),
            content: Column(
              mainAxisSize: MainAxisSize.min,
              children: [
                ListTile(
                  leading: const Icon(Icons.thumb_up, color: Colors.green),
-                 title: const Text('已采集点赞数'),
+                 title: const Text('获赞数'),
                  trailing: Text('$upvotes', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Colors.green)),
                ),
              ]
            ),
-           actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('退出'))]
+           actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('关闭'))]
          );
       }
     );
@@ -246,17 +244,17 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
             return AlertDialog(
               backgroundColor: Colors.white,
               surfaceTintColor: Colors.transparent,
-              title: const Row(children: [Icon(Icons.warning_amber, color: Colors.redAccent), SizedBox(width: 8), Text('系统安全警告记录')]),
+              title: const Row(children: [Icon(Icons.warning_amber, color: Colors.redAccent), SizedBox(width: 8), Text('警告用户')]),
               content: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('管理层级定义：记几分？', style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.bold)),
+                    const Text('严重程度：记几分？', style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 6),
                     TextField(controller: strikesCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(border: OutlineInputBorder(), isDense: true)),
                     const SizedBox(height: 16),
-                    const Text('违规事务批注（公开记录状态）', style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.bold)),
+                    const Text('用户批注（对用户可见）', style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 6),
                     TextField(controller: publicCtrl, maxLines: 3, decoration: const InputDecoration(border: OutlineInputBorder())),
                   ],
@@ -278,10 +276,10 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                       );
                       if (mounted) {
                         Navigator.pop(context);
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('违规记录上报已成功入库！')));
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('警告下发成功！')));
                       }
                     } on DioException catch (e) {
-                       String errMsg = '当前凭据受到拦截限制，安全记录下发受阻。';
+                       String errMsg = '警告失败';
                        try {
                          final errs = e.response?.data['errors'];
                          if (errs != null && errs is List && errs.isNotEmpty && errs[0]['detail'] != null) {
@@ -293,7 +291,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                       if (mounted) setStateDialog(() => isSubmitting = false);
                     }
                   },
-                  child: isSubmitting ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('上报记录'),
+                  child: isSubmitting ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('发送警告'),
                 ),
               ],
             );
@@ -329,7 +327,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
           _posts[index]['attributes']['likesCount'] = currentLikesCount;
         });
         
-        String errMsg = '安全记录处理失败，请求被终止。';
+        String errMsg = '操作失败';
         try {
           final errs = e.response?.data['errors'];
           if (errs != null && errs is List && errs.isNotEmpty && errs[0]['detail'] != null) {
@@ -346,10 +344,10 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
       await widget.api.deletePost(postId);
       if (mounted) {
         setState(() { _posts.removeAt(index); });
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已从记录节点安全抹除')));
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('删除成功')));
       }
     } on DioException catch (e) {
-      String errMsg = '请求越权，无法执行清理任务。';
+      String errMsg = '删除失败';
       try {
         final errs = e.response?.data['errors'];
         if (errs != null && errs is List && errs.isNotEmpty && errs[0]['detail'] != null) {
@@ -445,8 +443,8 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                                       return AlertDialog(
                                         backgroundColor: Colors.white,
                                         surfaceTintColor: Colors.transparent,
-                                        title: const Text('系统付款确认', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-                                        content: Text('已请求验证，确认花费 $payAmount XSD 建立该权限连接吗？'),
+                                        title: const Text('购买付费内容', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+                                        content: Text('确认花费 $payAmount XSD 购买该隐藏内容吗？'),
                                         actions: [
                                           TextButton(
                                             onPressed: () => Navigator.pop(ctx),
@@ -460,31 +458,30 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                                                 await widget.api.buyPost(possibleIds, discussionId, postId);
                                                 if (mounted) {
                                                   Navigator.pop(ctx); 
-                                                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('交易凭据生效。')));
+                                                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('购买成功！')));
                                                   setState(() => _isLoading = true);
                                                   _loadDiscussionDetail(); 
                                                 }
                                               } catch (e) {
                                                 if (mounted) {
-                                                  String errMsg = '处理异常：服务器拒绝服务或数据错误。';
-                                                  final eStr = e.toString();
-
-                                                  if (eStr.contains('API_ROUTE_UNMATCHED')) {
-                                                     errMsg = '系统异常：未检出关联的服务路由参数，请管理员检阅后端配置环境。';
-                                                  } else if (e is DioException) {
+                                                  String errMsg = '购买失败';
+                                                  if (e is DioException) {
                                                      try {
                                                        final rawData = e.response?.data;
                                                        if (rawData != null && rawData is Map) {
                                                          if (rawData['errors'] != null && rawData['errors'] is List && rawData['errors'].isNotEmpty) {
-                                                           final errDetail = rawData['errors'][0]['detail'] ?? rawData['errors'][0]['code'];
-                                                           if (errDetail != null) errMsg = '异常反馈: $errDetail';
+                                                           final errCode = rawData['errors'][0]['code'];
+                                                           final errDetail = rawData['errors'][0]['detail'];
+                                                           errMsg = errDetail ?? '失败原因: $errCode';
                                                          } else if (rawData['message'] != null) {
-                                                           errMsg = '异常反馈: ${rawData['message']}';
+                                                           errMsg = '失败原因: ${rawData['message']}';
+                                                         } else {
+                                                           errMsg = '失败原因: HTTP ${e.response?.statusCode}';
                                                          }
                                                        }
                                                      } catch (_) {}
                                                   } else {
-                                                     errMsg = '未能处理当前请求：${eStr.replaceAll('Exception: ', '')}';
+                                                     errMsg = e.toString().replaceAll('Exception: ', '');
                                                   }
                                                   
                                                   ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg), duration: const Duration(seconds: 4)));
@@ -496,7 +493,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                                             },
                                             child: isSubmitting 
                                               ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) 
-                                              : const Text('立即购买'),
+                                              : const Text('确认购买'),
                                           ),
                                         ],
                                       );
@@ -550,7 +547,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                 children: [
                   Icon(Icons.edit, size: 18, color: Colors.grey.shade500),
                   const SizedBox(width: 8),
-                  Text('开启业务回复...', style: TextStyle(color: Colors.grey.shade500, fontSize: 14)),
+                  Text('写下你的回复...', style: TextStyle(color: Colors.grey.shade500, fontSize: 14)),
                 ],
               ),
             ),
@@ -572,7 +569,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
             children: [
               Icon(Icons.warning_amber_rounded, size: 64, color: Colors.red.shade300),
               const SizedBox(height: 16),
-              Text('服务器返回连接终止', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.red.shade800)),
+              const Text('加载失败', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.red)),
               const SizedBox(height: 12),
               SelectableText(_error!, style: TextStyle(fontSize: 13, color: Colors.grey.shade700, fontFamily: 'monospace')),
               const SizedBox(height: 24),
@@ -581,7 +578,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                   setState(() { _isLoading = true; _error = null; });
                   _loadDiscussionDetail();
                 }, 
-                child: const Text('重试连接')
+                child: const Text('重试')
               ),
             ],
           ),
@@ -736,7 +733,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                   InkWell(
                     onTap: _openReplyEditor,
                     borderRadius: BorderRadius.circular(16),
-                    child: Padding(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6), child: Text('业务回复', style: TextStyle(color: Colors.grey.shade700, fontSize: 13, fontWeight: FontWeight.w500))),
+                    child: Padding(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6), child: Text('回复', style: TextStyle(color: Colors.grey.shade700, fontSize: 13, fontWeight: FontWeight.w500))),
                   ),
                   const SizedBox(width: 8),
                   
@@ -758,13 +755,13 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                       else if (value == 'vote') _showVoteDetails(index);
                     },
                     itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
-                      const PopupMenuItem<String>(value: 'tip', child: Row(children: [Icon(Icons.card_giftcard, size: 18, color: Colors.orange), SizedBox(width: 8), Text('入库打赏')])),
-                      const PopupMenuItem<String>(value: 'vote', child: Row(children: [Icon(Icons.how_to_vote_outlined, size: 18, color: Colors.blueAccent), SizedBox(width: 8), Text('点赞数据记录')])),
+                      const PopupMenuItem<String>(value: 'tip', child: Row(children: [Icon(Icons.card_giftcard, size: 18, color: Colors.orange), SizedBox(width: 8), Text('打赏')])),
+                      const PopupMenuItem<String>(value: 'vote', child: Row(children: [Icon(Icons.how_to_vote_outlined, size: 18, color: Colors.blueAccent), SizedBox(width: 8), Text('点赞详情')])),
                       
-                      if (canEdit) const PopupMenuItem<String>(value: 'edit', child: Row(children: [Icon(Icons.edit_outlined, size: 18), SizedBox(width: 8), Text('编辑业务数据')])),
-                      if (_canWarnUser) const PopupMenuItem<String>(value: 'warn', child: Row(children: [Icon(Icons.info_outline, size: 18, color: Colors.redAccent), SizedBox(width: 8), Text('生成警告记录')])),
+                      if (canEdit) const PopupMenuItem<String>(value: 'edit', child: Row(children: [Icon(Icons.edit_outlined, size: 18), SizedBox(width: 8), Text('编辑')])),
+                      if (_canWarnUser) const PopupMenuItem<String>(value: 'warn', child: Row(children: [Icon(Icons.info_outline, size: 18, color: Colors.redAccent), SizedBox(width: 8), Text('警告')])),
                       if (canDelete) const PopupMenuDivider(),
-                      if (canDelete) const PopupMenuItem<String>(value: 'delete', child: Row(children: [Icon(Icons.delete_outline, size: 18, color: Colors.red), SizedBox(width: 8), Text('安全抹除', style: TextStyle(color: Colors.red))])),
+                      if (canDelete) const PopupMenuItem<String>(value: 'delete', child: Row(children: [Icon(Icons.delete_outline, size: 18, color: Colors.red), SizedBox(width: 8), Text('删除', style: TextStyle(color: Colors.red))])),
                     ],
                   ),
                 ],
