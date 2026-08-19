@@ -29,6 +29,10 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
   List<dynamic> _posts = [];
   Map<String, dynamic> _usersMap = {};
   
+  // [关键：保存原始数据用于深度嗅探 PayNode ID]
+  Map<String, dynamic> _discussionData = {};
+  List<dynamic> _included = [];
+  
   FlarumUser? _currentUser;
 
   @override
@@ -75,6 +79,8 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
       });
 
       setState(() {
+        _discussionData = data['data'] ?? {};
+        _included = included;
         _usersMap = users;
         _posts = postsList;
         _isLoading = false;
@@ -372,7 +378,8 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
     }
   }
   
-  Widget _buildPayBlock(String payAmount, String buyersCount, int postId, int discussionId) {
+  // 核心支持传入 PayNodeId 以突破 Ziiven 的特殊校验
+  Widget _buildPayBlock(String payAmount, String buyersCount, int postId, int discussionId, String? payNodeId) {
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 8),
       padding: const EdgeInsets.all(16),
@@ -440,7 +447,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                                             onPressed: isSubmitting ? null : () async {
                                               setStateDialog(() => isSubmitting = true);
                                               try {
-                                                await widget.api.buyPost(postId, discussionId);
+                                                await widget.api.buyPost(postId, discussionId, payNodeId);
                                                 if (mounted) {
                                                   Navigator.pop(ctx); 
                                                   ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('购买成功！')));
@@ -449,12 +456,11 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                                                 }
                                               } catch (e) {
                                                 if (mounted) {
-                                                  // [重构错误展示逻辑：精准过滤 API_ROUTE_UNMATCHED]
-                                                  String errMsg = '失败原因：系统拒绝服务或未能处理。';
+                                                  String errMsg = '系统拒绝服务或未能处理。';
                                                   final eStr = e.toString();
 
                                                   if (eStr.contains('API_ROUTE_UNMATCHED')) {
-                                                     errMsg = '未能命中付费插件接口，请联系管理员确认后台配置 (尝试了 paytoread 等路由)。';
+                                                     errMsg = '未能命中付费插件接口 (节点嗅探: ${payNodeId ?? "无"})，请检查后台路由。';
                                                   } else if (e is DioException) {
                                                      try {
                                                        final rawData = e.response?.data;
@@ -468,7 +474,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                                                        }
                                                      } catch (_) {}
                                                   } else {
-                                                     errMsg = '错误拦截：${eStr.replaceAll('Exception: ', '')}';
+                                                     errMsg = '错误：${eStr.replaceAll('Exception: ', '')}';
                                                   }
                                                   
                                                   ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg), duration: const Duration(seconds: 4)));
@@ -574,6 +580,31 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
         final bool canEdit = attrs['canEdit'] == true;
         final bool canDelete = attrs['canDelete'] == true;
         
+        // [绝杀引擎：嗅探深层的 PayNode ID]
+        String? payNodeId;
+        final pRels = post['relationships'] ?? {};
+        final dRels = _discussionData['relationships'] ?? {};
+
+        for (var key in ['payToRead', 'pay-to-read', 'payToSee', 'pay-to-see', 'paytoread']) {
+          if (pRels[key]?['data'] is Map) {
+            payNodeId = pRels[key]['data']['id']?.toString();
+            break;
+          }
+          if (dRels[key]?['data'] is Map) {
+            payNodeId = dRels[key]['data']['id']?.toString();
+            break;
+          }
+        }
+        if (payNodeId == null) {
+          for (var inc in _included) {
+            final t = inc['type'];
+            if (t == 'pay-to-read' || t == 'pay-to-see' || t == 'paytoread') {
+              payNodeId = inc['id'].toString();
+              break;
+            }
+          }
+        }
+        
         bool isPayProtected = false;
         String payAmount = '1';
         String buyersCount = '0';
@@ -642,7 +673,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
               const SizedBox(height: 12),
               
               if (isPayProtected) 
-                 _buildPayBlock(payAmount, buyersCount, postId, discussionId)
+                 _buildPayBlock(payAmount, buyersCount, postId, discussionId, payNodeId) // 发送嗅探到的节点
               else 
                  HtmlWidget(htmlContent, textStyle: const TextStyle(fontSize: 16, height: 1.6, color: Colors.black87)),
                  
