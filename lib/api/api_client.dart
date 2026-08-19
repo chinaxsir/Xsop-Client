@@ -139,60 +139,70 @@ class ApiClient {
     return '';
   }
 
-  // [精准重构：加入 Pay To Read (Ziiven) 专用路由探针]
+  // [绝对杀招：极速“智能短路”探针]
   Future<void> buyPost(int postId, int discussionId) async {
     DioException? lastErr;
     
-    // 覆盖了主流的单帖/主题付费流派
-    final combinations = [
-      { 'url': '/api/ziiven/pay-to-read/$discussionId', 'data': {} }, // 特供 Ziiven 插件
-      { 'url': '/api/ziiven/pay/$discussionId', 'data': {} },
-      { 'url': '/api/pay-to-read/$discussionId', 'data': {"data": {}} },
-      { 'url': '/api/pay-to-read/$postId', 'data': {"data": {}} },
-      { 'url': '/api/pay-to-see/$postId', 'data': {"data": {}} },
-      { 'url': '/api/pay-to-see/$discussionId', 'data': {"data": {}} },
-      { 'url': '/api/discussions/$discussionId/pay', 'data': {"data": {}} },
-      { 'url': '/api/posts/$postId/pay', 'data': {"data": {}} },
+    // 按真实命中率排列，Ziiven 的无横杠路由放在绝对 C 位！
+    final endpoints = [
+      '/api/paytoread/$discussionId', // <- 命中您的图2！
+      '/api/paytoread/$postId',       // <- 后备单帖版
+      '/api/pay-to-see/$postId',      // Xypp 版
+      '/api/pay-to-read/$discussionId',
+      '/api/discussions/$discussionId/pay',
     ];
 
-    for (final combo in combinations) {
-      try {
-        await _dio.post(combo['url'] as String, data: combo['data']);
-        return; // 秒扣款成功！
-      } on DioException catch (e) {
-        lastErr = e;
-        final code = e.response?.statusCode;
-        final errCode = _extractErrorCode(e.response?.data);
-        final resStr = e.response?.data?.toString() ?? '';
+    // Flarum 标准底层所需的不同包裹格式
+    final payloads = [
+      {"data": {}},
+      {"data": {"type": "paytoread", "attributes": {}}},
+      {"data": {"type": "posts", "id": postId.toString()}},
+    ];
 
-        // 如果是 route_not_found(路由不存在)，或 not_found(传错了ID导致查不到数据库记录)，直接测下一个
-        if (code == 404 || code == 405 || errCode == 'route_not_found' || errCode == 'not_found') {
-           continue; 
-        }
+    for (final ep in endpoints) {
+      bool routeExists = false;
 
-        // 如果服务器返回了 422/403 且包含余额不足、没有足够资金等字样，说明路由撞对了！立刻阻断并抛出！
-        if (resStr.contains('不足') || 
-            resStr.contains('not enough') || 
-            resStr.contains('余额') || 
-            resStr.contains('fund') || 
-            resStr.contains('insufficient') || 
-            code == 403) {
-           throw e;
+      for (final p in payloads) {
+        try {
+          await _dio.post(ep, data: p);
+          return; // 只要 200，秒扣款完成！
+        } on DioException catch (e) {
+          lastErr = e;
+          final code = e.response?.statusCode;
+          final errCode = _extractErrorCode(e.response?.data);
+
+          // [毫秒级加速]：如果探针碰到了 404 (路由不存在)，千万别在里头纠缠了！
+          // 直接 break 中断这组 payload 的循环，秒切下一个路由，速度起飞！
+          if (code == 404 || code == 405 || errCode == 'route_not_found' || errCode == 'not_found') {
+             routeExists = false;
+             break; 
+          }
+
+          // 只要没进 404，说明这扇门是开着的！只是插件认为您没钱，或是 payload 少了参数
+          routeExists = true;
+
+          final resStr = e.response?.data?.toString() ?? '';
+          // 如果门里的插件说你钱不够，那直接抛出真实结果，不再测了！
+          if (resStr.contains('不足') || resStr.contains('enough') || resStr.contains('余额') || resStr.contains('fund')) {
+             throw e;
+          }
+
+          // 如果是 422 参数缺失等报错，说明这个路由对，但当前 payload 不对，继续 for 循环让内层换一个 payload 试试
         }
-        
-        // 如果是 payload 格式引起的校验错误 (validation_error)，继续探下一种组合
-        if (code == 422 || code == 400 || errCode == 'validation_error') {
-           continue;
-        }
-        
-        throw e;
+      }
+
+      // 如果这个路由是活的，并且所有 payload 都在这里阵亡了（比如插件内部崩了），
+      // 我们没有必要再去测后面不存在的路由了，直接把最后一次最真实的报错抛给用户界面！
+      if (routeExists && lastErr != null) {
+        throw lastErr;
       }
     }
     
-    if (lastErr != null) throw lastErr;
-    throw Exception('购买被阻断：未能匹配到正确的付费路由，请检查后端插件支持。');
+    // 只有所有路由全是 404 才会抛出这个（由 UI 负责转化成看得懂的中文）
+    throw Exception('API_ROUTE_UNMATCHED');
   }
 
+  // 同步提速打赏探针
   Future<void> tipPost(int postId, int amount) async {
     DioException? lastErr;
     final endpoints = [
@@ -209,6 +219,7 @@ class ApiClient {
     ];
 
     for (final ep in endpoints) {
+      bool routeExists = false;
       for (final p in payloads) {
         try {
           await _dio.post(ep, data: p);
@@ -216,12 +227,19 @@ class ApiClient {
         } on DioException catch (e) {
           lastErr = e;
           final code = e.response?.statusCode;
-          if (code == 404 || code == 405) break; 
+          final errCode = _extractErrorCode(e.response?.data);
+          
+          if (code == 404 || code == 405 || errCode == 'route_not_found' || errCode == 'not_found') {
+             routeExists = false;
+             break; 
+          }
+          routeExists = true;
         }
       }
+      if (routeExists && lastErr != null) throw lastErr;
     }
-    if (lastErr != null) throw lastErr;
-    throw Exception('打赏操作被阻断：未匹配到有效的 API 接口。');
+    
+    throw Exception('API_ROUTE_UNMATCHED');
   }
 
   Future<void> reportPost(int postId, String reason, String? detail) async {
