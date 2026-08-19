@@ -153,25 +153,22 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                         Navigator.pop(context);
                         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('打赏成功！')));
                       }
-                    } on DioException catch (e) {
-                      if (mounted) {
-                         String errMsg = '打赏被拦截：余额不足或操作受限。';
-                         try {
-                           final rawData = e.response?.data;
-                           if (rawData != null && rawData is Map) {
-                             if (rawData['errors'] != null && rawData['errors'] is List && rawData['errors'].isNotEmpty) {
-                               errMsg = rawData['errors'][0]['detail'] ?? errMsg;
-                             } else if (rawData['message'] != null) {
-                               errMsg = rawData['message'];
-                             }
-                           }
-                         } catch (_) {}
-                         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg), duration: const Duration(seconds: 4)));
-                         Navigator.pop(context); 
-                      }
                     } catch (e) {
                       if (mounted) {
-                         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('系统异常：${e.toString()}'), duration: const Duration(seconds: 4)));
+                         String errMsg = '打赏失败：系统拒绝服务或未能处理。';
+                         if (e.toString().contains('API_ROUTE_UNMATCHED')) {
+                            errMsg = '未找到适配的打赏API插件路由，请检查后端配置。';
+                         } else if (e is DioException) {
+                            try {
+                               final rawData = e.response?.data;
+                               if (rawData != null && rawData is Map && rawData['errors'] != null && rawData['errors'].isNotEmpty) {
+                                 errMsg = rawData['errors'][0]['detail'] ?? rawData['errors'][0]['code'];
+                               }
+                            } catch (_) {}
+                         } else {
+                            errMsg = e.toString().replaceAll('Exception: ', '');
+                         }
+                         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg), duration: const Duration(seconds: 4)));
                          Navigator.pop(context); 
                       }
                     } finally {
@@ -375,7 +372,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
     }
   }
   
-  // [全面支持传入 PostID 与 DiscussionID 双维度校验]
   Widget _buildPayBlock(String payAmount, String buyersCount, int postId, int discussionId) {
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 8),
@@ -451,26 +447,31 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                                                   setState(() => _isLoading = true);
                                                   _loadDiscussionDetail(); 
                                                 }
-                                              } on DioException catch (e) {
-                                                if (mounted) {
-                                                  String errMsg = '失败原因：系统拒绝服务或未能处理。';
-                                                  try {
-                                                    final rawData = e.response?.data;
-                                                    if (rawData != null && rawData is Map) {
-                                                      if (rawData['errors'] != null && rawData['errors'] is List && rawData['errors'].isNotEmpty) {
-                                                        final errDetail = rawData['errors'][0]['detail'] ?? rawData['errors'][0]['code'];
-                                                        if (errDetail != null) errMsg = '失败原因: $errDetail';
-                                                      } else if (rawData['message'] != null) {
-                                                        errMsg = '失败原因: ${rawData['message']}';
-                                                      }
-                                                    }
-                                                  } catch (_) {}
-                                                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg), duration: const Duration(seconds: 4)));
-                                                  Navigator.pop(ctx);
-                                                }
                                               } catch (e) {
                                                 if (mounted) {
-                                                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('错误拦截：${e.toString().replaceAll('Exception: ', '')}'), duration: const Duration(seconds: 4)));
+                                                  // [重构错误展示逻辑：精准过滤 API_ROUTE_UNMATCHED]
+                                                  String errMsg = '失败原因：系统拒绝服务或未能处理。';
+                                                  final eStr = e.toString();
+
+                                                  if (eStr.contains('API_ROUTE_UNMATCHED')) {
+                                                     errMsg = '未能命中付费插件接口，请联系管理员确认后台配置 (尝试了 paytoread 等路由)。';
+                                                  } else if (e is DioException) {
+                                                     try {
+                                                       final rawData = e.response?.data;
+                                                       if (rawData != null && rawData is Map) {
+                                                         if (rawData['errors'] != null && rawData['errors'] is List && rawData['errors'].isNotEmpty) {
+                                                           final errDetail = rawData['errors'][0]['detail'] ?? rawData['errors'][0]['code'];
+                                                           if (errDetail != null) errMsg = '失败原因: $errDetail';
+                                                         } else if (rawData['message'] != null) {
+                                                           errMsg = '失败原因: ${rawData['message']}';
+                                                         }
+                                                       }
+                                                     } catch (_) {}
+                                                  } else {
+                                                     errMsg = '错误拦截：${eStr.replaceAll('Exception: ', '')}';
+                                                  }
+                                                  
+                                                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg), duration: const Duration(seconds: 4)));
                                                   Navigator.pop(ctx);
                                                 }
                                               } finally {
@@ -554,7 +555,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
       itemBuilder: (context, index) {
         final post = _posts[index];
         final postId = int.parse(post['id']);
-        final discussionId = int.parse(widget.discussion.id); // 提取父级主题ID
+        final discussionId = int.parse(widget.discussion.id); 
         final attrs = post['attributes'] ?? {};
         
         final userIdStr = post['relationships']?['user']?['data']?['id']?.toString();
