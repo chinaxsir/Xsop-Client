@@ -80,8 +80,13 @@ class ApiClient {
     return _asMap(response.data);
   }
 
+  // [修改点 1：强行要求服务器暴露出 payToRead 和 paytoread 关联模型]
   Future<Map<String, dynamic>> getDiscussion(int id, {int page = 1, int pageSize = 20}) async {
-    final response = await _dio.get('/api/discussions/$id', queryParameters: {'page[number]': page, 'page[size]': pageSize, 'include': 'user,posts,posts.user'});
+    final response = await _dio.get('/api/discussions/$id', queryParameters: {
+      'page[number]': page, 
+      'page[size]': pageSize, 
+      'include': 'user,posts,posts.user,payToRead,paytoread,posts.payToRead,posts.paytoread'
+    });
     return _asMap(response.data);
   }
 
@@ -139,84 +144,74 @@ class ApiClient {
     return '';
   }
 
-  // [终极探测引擎：支持独立 payNodeId 嗅探与 Action 后缀]
-  Future<void> buyPost(int postId, int discussionId, String? payNodeId) async {
+  // [修改点 2：矩阵剪枝极速探针，自动轮换 ID 弹药库]
+  Future<void> buyPost(List<String> possibleIds) async {
     DioException? lastErr;
     
-    final endpoints = [
-      // 1. 独立购买节点精准打击 (解决 not_found 的核心)
-      if (payNodeId != null) '/api/pay-to-read/$payNodeId/purchase',
-      if (payNodeId != null) '/api/paytoread/$payNodeId/purchase',
-      if (payNodeId != null) '/api/pay-to-see/$payNodeId/purchase',
-      if (payNodeId != null) '/api/pay-to-read/$payNodeId/buy',
-      if (payNodeId != null) '/api/paytoread/$payNodeId/buy',
-      if (payNodeId != null) '/api/pay-to-read/$payNodeId',
-      if (payNodeId != null) '/api/paytoread/$payNodeId',
-      
-      // 2. Ziiven Pay To Read (主题级流派)
-      '/api/pay-to-read/$discussionId/purchase',
-      '/api/paytoread/$discussionId/purchase',
-      '/api/pay-to-read/$discussionId/buy',
-      '/api/paytoread/$discussionId/buy',
-      '/api/discussions/$discussionId/pay-to-read',
-      '/api/discussions/$discussionId/paytoread',
-
-      // 3. Xypp Pay To See (单帖级流派)
-      '/api/pay-to-see/$postId/purchase',
-      '/api/pay-to-see/$postId/buy',
-      '/api/posts/$postId/pay-to-see',
-
-      // 4. 通用兜底
-      '/api/pay-to-read/$discussionId',
-      '/api/paytoread/$discussionId',
-      '/api/pay-to-see/$postId',
-      '/api/discussions/$discussionId/pay',
-      '/api/posts/$postId/pay',
+    // 我们预设所有可能被插件注册的路由模板
+    final routeTemplates = [
+      '/api/paytoread/{id}',
+      '/api/pay-to-read/{id}',
+      '/api/ziiven/paytoread/{id}',
+      '/api/paytosee/{id}',
+      '/api/pay-to-see/{id}',
+      '/api/discussions/{id}/pay',
+      '/api/posts/{id}/pay',
+      '/api/discussions/{id}/paytoread',
+      '/api/posts/{id}/paytoread',
     ];
 
-    // 包裹兼容 Flarum JSON API 的所有可能性
+    // 包裹载荷格式
     final payloads = [
       {"data": {}},
       {"data": {"type": "paytoread", "attributes": {}}},
-      {"data": {"type": "posts", "id": postId.toString()}},
-      {"data": {"type": "discussions", "id": discussionId.toString()}},
     ];
 
-    for (final ep in endpoints) {
-      bool routeExists = false;
-      for (final p in payloads) {
-        try {
-          await _dio.post(ep, data: p);
-          return; // 秒扣款成功！
-        } on DioException catch (e) {
-          lastErr = e;
-          final code = e.response?.statusCode;
-          final errCode = _extractErrorCode(e.response?.data);
+    for (final tmpl in routeTemplates) {
+      bool isRouteValid = true;
 
-          // 遇到路由不存在，或指定的 ID 找不着模型，立刻短路跳过当前端点，换下一个 URL 测！
-          if (code == 404 || code == 405 || errCode == 'route_not_found' || errCode == 'not_found') {
-             routeExists = false;
-             break; 
-          }
+      for (final id in possibleIds) {
+        final ep = tmpl.replaceAll('{id}', id);
 
-          routeExists = true;
-          final resStr = e.response?.data?.toString() ?? '';
+        for (final p in payloads) {
+          try {
+            await _dio.post(ep, data: p);
+            return; // 只要 200/201，直接判定成功并结束
+          } on DioException catch (e) {
+            lastErr = e;
+            final code = e.response?.statusCode;
+            final errCode = _extractErrorCode(e.response?.data);
 
-          // 抓到余额不足等核心业务错误，说明接口完全通了，立刻抛给用户！
-          if (resStr.contains('不足') || resStr.contains('enough') || resStr.contains('余额') || resStr.contains('fund') || code == 403) {
-             throw e;
+            // 【剪枝逻辑 1】：如果返回了 405 (Method Not Allowed) 或 route_not_found，说明网址都不对
+            // 直接掐断这整个模板，跳过后续所有 ID 的测试，节约大量时间！
+            if (code == 405 || errCode == 'route_not_found' || (code == 404 && errCode != 'not_found')) {
+              isRouteValid = false;
+              break; 
+            }
+
+            // 【剪枝逻辑 2】：如果返回 not_found (404)，说明路由对了，但这个 ID 在库里没有！
+            // 打断当前 payload 循环，直接换下一个 ID 去试！
+            if (code == 404 || errCode == 'not_found') {
+              break; 
+            }
+
+            final resStr = e.response?.data?.toString() ?? '';
+            
+            // 【命中标靶】：只要返回信息里包含资金相关的报错，说明路由和 ID 全对上了！直接把真实错误抛出！
+            if (resStr.contains('不足') || resStr.contains('enough') || resStr.contains('余额') || resStr.contains('fund') || code == 403) {
+              throw e; 
+            }
           }
         }
-      }
-      
-      // 如果这个路由是通的（比如是 422 格式错误或 500），且所有 payload 都不行，把这个最真实的错误保留抛出
-      if (routeExists && lastErr != null) {
-        throw lastErr;
+        
+        // 如果上面判定该路由模板完全无效，就结束 ID 循环，去测下一个路由模板
+        if (!isRouteValid) break; 
       }
     }
     
-    // 把查找到的 PayNodeId 附在报错上，方便我们一眼看穿！
-    throw Exception('API_ROUTE_UNMATCHED_PAYNODE_${payNodeId ?? "NULL"}');
+    // 如果全部遍历完了都没中靶，抛出错误并附带弹药库，方便核对
+    if (lastErr != null) throw lastErr;
+    throw Exception('API_ROUTE_UNMATCHED: 探针未能击穿后台路由。');
   }
 
   Future<void> tipPost(int postId, int amount) async {
