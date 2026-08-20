@@ -443,8 +443,8 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                                       return AlertDialog(
                                         backgroundColor: Colors.white,
                                         surfaceTintColor: Colors.transparent,
-                                        title: const Text('购买付费内容', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-                                        content: Text('确认花费 $payAmount XSD 购买该隐藏内容吗？'),
+                                        title: const Text('确认购买', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+                                        content: Text('是否确认花费 $payAmount XSD 购买该隐藏内容？'),
                                         actions: [
                                           TextButton(
                                             onPressed: () => Navigator.pop(ctx),
@@ -464,28 +464,33 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                                                 }
                                               } catch (e) {
                                                 if (mounted) {
-                                                  String errMsg = '购买失败';
-                                                  if (e is DioException) {
-                                                     try {
-                                                       final rawData = e.response?.data;
-                                                       if (rawData != null && rawData is Map) {
-                                                         if (rawData['errors'] != null && rawData['errors'] is List && rawData['errors'].isNotEmpty) {
-                                                           final errCode = rawData['errors'][0]['code'];
-                                                           final errDetail = rawData['errors'][0]['detail'];
-                                                           errMsg = errDetail ?? '失败原因: $errCode';
-                                                         } else if (rawData['message'] != null) {
-                                                           errMsg = '失败原因: ${rawData['message']}';
-                                                         } else {
-                                                           errMsg = '失败原因: HTTP ${e.response?.statusCode}';
-                                                         }
-                                                       }
-                                                     } catch (_) {}
+                                                  final eStr = e.toString();
+                                                  Navigator.pop(ctx); // 先关闭确认弹窗
+
+                                                  // [透视仪触发：如果在后台测出了 X-Ray 记录，通过强制弹窗全量展示给用户！]
+                                                  if (eStr.contains('X-RAY_LOG')) {
+                                                     showDialog(
+                                                        context: context,
+                                                        builder: (errCtx) => AlertDialog(
+                                                           title: const Text('透视探针报告', style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
+                                                           content: SizedBox(
+                                                              width: double.maxFinite,
+                                                              child: SingleChildScrollView(
+                                                                 child: SelectableText(eStr.replaceAll('Exception: X-RAY_LOG:\n\n', ''), style: const TextStyle(fontSize: 12, fontFamily: 'monospace')),
+                                                              ),
+                                                           ),
+                                                           actions: [
+                                                              TextButton(onPressed: () => Navigator.pop(errCtx), child: const Text('关闭'))
+                                                           ],
+                                                        )
+                                                     );
+                                                  } else if (eStr.contains('X-RAY_HIT_BUSINESS_ERROR')) {
+                                                     // 说明正常命中余额不足，用普通方式弹出
+                                                     String pureMsg = eStr.replaceAll('Exception: X-RAY_HIT_BUSINESS_ERROR: ', '');
+                                                     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('失败原因: $pureMsg'), duration: const Duration(seconds: 4)));
                                                   } else {
-                                                     errMsg = e.toString().replaceAll('Exception: ', '');
+                                                     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('异常拦截：${eStr.replaceAll('Exception: ', '')}'), duration: const Duration(seconds: 4)));
                                                   }
-                                                  
-                                                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg), duration: const Duration(seconds: 4)));
-                                                  Navigator.pop(ctx);
                                                 }
                                               } finally {
                                                 if (mounted) setStateDialog(() => isSubmitting = false);
