@@ -134,105 +134,104 @@ class ApiClient {
     await _dio.post('/api/warnings', data: data);
   }
 
-  // [终极矩阵探针：完全无视 404 返回码的具体内容，只认非 404 成功门槛]
-  Future<void> buyPost(List<String> possibleIds, int discussionId, int postId) async {
-    DioException? bestRouteErr;
-    
-    // 全覆盖所有衍生路由
-    final routeTemplates = [
-      '/api/pay-to-read/{id}',
-      '/api/paytoread/{id}',
-      '/api/pay-to-read/{id}/purchase',
-      '/api/pay-to-read/{id}/buy',
-      '/api/pay-to-see/{id}',
-      '/api/paytosee/{id}',
-      '/api/posts/{id}/pay-to-read',
-      '/api/discussions/{id}/pay-to-read',
-      '/api/posts/{id}/pay',
-      '/api/discussions/{id}/pay',
-      '/api/posts/{id}/purchase',
-      '/api/discussions/{id}/purchase',
-      '/api/posts/{id}/buy',
-      '/api/ziiven/paytoread/{id}',
-      '/api/ziiven/pay/{id}',
-      '/api/pay/{id}',
-    ];
-
-    final noIdRoutes = [
-      '/api/pay-to-read',
-      '/api/paytoread',
-      '/api/pay-to-see',
-      '/api/purchases',
-      '/api/orders',
-    ];
-
-    // 标准 Flarum JSON API 全套开门钥匙
-    final payloads = [
-      {"data": {}},
-      {"data": {"type": "paytoread", "attributes": {}}},
-      {"data": {"type": "pay-to-read", "attributes": {}}},
-      {"data": {"attributes": {"pay": true}}},
-      {"pay": true},
-      {"data": {"attributes": {"post_id": postId}}},
-      {"data": {"relationships": {"post": {"data": {"type": "posts", "id": postId.toString()}}}}},
-      {"data": {"relationships": {"discussion": {"data": {"type": "discussions", "id": discussionId.toString()}}}}},
-    ];
-
-    final allUrls = <String>[];
-    for (var tmpl in routeTemplates) {
-      for (var id in possibleIds) {
-        allUrls.add(tmpl.replaceAll('{id}', id));
+  String _extractErrorCode(dynamic data) {
+    try {
+      if (data is Map && data['errors'] is List && data['errors'].isNotEmpty) {
+        return data['errors'][0]['code']?.toString() ?? '';
       }
-    }
-    allUrls.addAll(noIdRoutes);
-
-    // 跨越 POST 与 PUT 进行暴力破拆
-    for (final method in ['POST', 'PUT']) {
-      for (final ep in allUrls) {
-        bool isRoute404 = false;
-
-        for (final p in payloads) {
-          try {
-            if (method == 'POST') {
-              await _dio.post(ep, data: p);
-            } else {
-              await _dio.put(ep, data: p);
-            }
-            return; // HTTP 200/201: 交易直接成功！
-          } on DioException catch (e) {
-            final code = e.response?.statusCode;
-            
-            // 核心剪枝：遇到任何形式的 404 或 405，立马停止当前 URL 的挣扎，直接短路测下一个！毫秒级响应！
-            if (code == 404 || code == 405) {
-               isRoute404 = true;
-               break; 
-            }
-            
-            // 如果跑到这，说明遇到了 422、400、403，意味着我们找对了门！
-            bestRouteErr = e;
-            
-            final resStr = e.response?.data?.toString() ?? '';
-            // 如果报错里出现资金相关的业务拦截，直接将这个最正确的阻碍抛出！
-            if (RegExp(r'不足|enough|余额|fund|权限|不能|支付|buy|XSD|积分|金币|购买', caseSensitive: false).hasMatch(resStr) || code == 403) {
-              throw e; 
-            }
-          }
-        }
-        
-        // 如果上面被 404 短路了，赶紧测下一个 URL
-        if (isRoute404) continue;
-
-        // 如果这个路由是真实存在的（触发了 422 等），但所有合法载荷都进不去，就将这个路由的真实反馈抛出保底
-        if (bestRouteErr != null) {
-          throw bestRouteErr;
-        }
-      }
-    }
-
-    throw Exception('API_ROUTE_UNMATCHED');
+    } catch (_) {}
+    return '';
   }
 
-  // 同步修复打赏接口
+  // [精准绝杀：完全照搬您网页端抓包抓到的真实请求路径与结构]
+  Future<void> buyPost(List<String> possibleIds, int discussionId, int postId) async {
+    DioException? bestErr;
+
+    // 1. 优先执行 Ziiven 专属请求通道（完全匹配您的截图）
+    final ziivenUrl = '/api/pay-to-read/payment/pay';
+    final ziivenPayloads = [
+      {"id": discussionId.toString()}, // 绝大多数情况下它只认这个格式
+      {"id": postId.toString()},
+      {"discussionId": discussionId.toString()},
+      {"data": {"attributes": {"id": discussionId.toString()}}},
+    ];
+
+    for (var p in ziivenPayloads) {
+       try {
+         await _dio.post(ziivenUrl, data: p);
+         return; // 购买成功！201 Created
+       } on DioException catch (e) {
+         final code = e.response?.statusCode;
+         if (code == 404 || code == 405) continue; // 如果因为其他原因路由不存在，继续保底流程
+
+         bestErr = e;
+         final resStr = e.response?.data?.toString() ?? '';
+         // 抓到余额不足等核心拦截，不再往下测
+         if (RegExp(r'不足|enough|余额|fund|权限|不能|支付|buy|XSD|积分|金币|购买|XSD', caseSensitive: false).hasMatch(resStr) || code == 403) {
+            throw e;
+         }
+       }
+    }
+
+    // 2. 如果上面 Ziiven 的专属通道没走通，保留原有的通用探针作为兜底防御网
+    final templates = [
+      '/api/paytoread/{id}',
+      '/api/pay-to-read/{id}',
+      '/api/ziiven/paytoread/{id}',
+      '/api/paytosee/{id}',
+      '/api/pay-to-see/{id}',
+      '/api/discussions/{id}/pay',
+      '/api/posts/{id}/pay',
+    ];
+
+    for (var tmpl in templates) {
+      bool routeExists = false;
+
+      for (var id in possibleIds) {
+         final ep = tmpl.replaceAll('{id}', id);
+         try {
+           await _dio.post(ep, data: {"data": {}});
+           return; 
+         } on DioException catch (e) {
+           final errCode = _extractErrorCode(e.response?.data);
+           final code = e.response?.statusCode;
+
+           if (code == 404 && errCode == 'route_not_found') {
+             routeExists = false;
+             break; 
+           }
+           if (code == 405) {
+             routeExists = false;
+             break;
+           }
+
+           routeExists = true;
+           bestErr = e;
+
+           if (code == 422 || errCode == 'validation_error') {
+               try {
+                  await _dio.post(ep, data: {"data": {"type": "paytoread", "attributes": {}}});
+                  return;
+               } on DioException catch (e2) {
+                  bestErr = e2;
+               }
+           }
+
+           if (errCode != 'not_found' && code != 404 && code != 422) {
+              throw bestErr!;
+           }
+         }
+      }
+
+      if (routeExists && bestErr != null) {
+         throw bestErr;
+      }
+    }
+
+    if (bestErr != null) throw bestErr;
+    throw Exception('未匹配到有效的购买接口，请确认后端插件已启用 API 支持。');
+  }
+
   Future<void> tipPost(int postId, int amount) async {
     DioException? bestErr;
     final endpoints = [
@@ -249,27 +248,38 @@ class ApiClient {
     ];
 
     for (final ep in endpoints) {
-      bool isRoute404 = false;
+      bool routeExists = false;
       for (final p in payloads) {
         try {
           await _dio.post(ep, data: p);
           return;
         } on DioException catch (e) {
           final code = e.response?.statusCode;
-          if (code == 404 || code == 405) {
-             isRoute404 = true;
+          final errCode = _extractErrorCode(e.response?.data);
+          
+          if (code == 404 && errCode == 'route_not_found') {
+             routeExists = false;
              break; 
           }
+          if (code == 405) {
+             routeExists = false;
+             break;
+          }
+
+          routeExists = true;
           bestErr = e;
-          if (code == 422) continue;
-          throw e; // 直接抛出实际业务报错
+
+          if (code == 422 || errCode == 'validation_error') continue;
+
+          if (errCode != 'not_found' && code != 404) {
+             throw e;
+          }
         }
       }
-      if (isRoute404) continue;
-      if (bestErr != null) throw bestErr;
+      if (routeExists && bestErr != null) throw bestErr;
     }
     
-    throw Exception('API_ROUTE_UNMATCHED');
+    throw Exception('未匹配到有效的打赏接口。');
   }
 
   Future<void> reportPost(int postId, String reason, String? detail) async {
