@@ -143,72 +143,56 @@ class ApiClient {
     return '';
   }
 
-  // [购买探针重构：精准识别 route_not_found 与 not_found 的差别]
+  // [战术记录仪：完整打印所有探测路由的反馈]
   Future<void> buyPost(List<String> possibleIds, int discussionId, int postId) async {
+    List<String> traceLog = [];
+    traceLog.add('可用ID弹药库: ${possibleIds.join(", ")}');
+    
     final templates = [
       '/api/paytoread/{id}',
       '/api/pay-to-read/{id}',
       '/api/ziiven/paytoread/{id}',
-      '/api/paytosee/{id}',
-      '/api/pay-to-see/{id}',
       '/api/discussions/{id}/pay',
       '/api/posts/{id}/pay',
     ];
 
-    DioException? bestErr;
-
     for (var tmpl in templates) {
-      bool routeExists = false;
-
       for (var id in possibleIds) {
          final ep = tmpl.replaceAll('{id}', id);
          try {
            await _dio.post(ep, data: {"data": {}});
-           return; // 购买成功
+           return; 
          } on DioException catch (e) {
            final errCode = _extractErrorCode(e.response?.data);
            final code = e.response?.statusCode;
 
-           // 1. 如果路由压根不存在，直接跳过当前模板，去测下一个网址格式
+           traceLog.add('[$ep] -> HTTP $code ($errCode)');
+
            if (code == 404 && errCode == 'route_not_found') {
-             routeExists = false;
              break; 
            }
            if (code == 405) {
-             routeExists = false;
              break;
            }
 
-           // 2. 只要没被上面拦截，说明网址找对了！保存最优报错信息
-           routeExists = true;
-           bestErr = e;
-
-           // 3. 如果报 422 格式错误，尝试用 Flarum 标准包裹格式再请求一次
            if (code == 422 || errCode == 'validation_error') {
                try {
                   await _dio.post(ep, data: {"data": {"type": "paytoread", "attributes": {}}});
                   return;
                } on DioException catch (e2) {
-                  bestErr = e2;
+                  traceLog.add('  + Payload重试 -> HTTP ${e2.response?.statusCode} (${_extractErrorCode(e2.response?.data)})');
                }
            }
 
-           // 4. 如果服务器明确返回了诸如 403 (余额不足) 这种真实的业务错误，不再测了，直接抛出！
-           if (errCode != 'not_found' && code != 404 && code != 422) {
-              throw bestErr!;
+           final resStr = e.response?.data?.toString() ?? '';
+           if (resStr.contains('不足') || resStr.contains('enough') || resStr.contains('余额') || resStr.contains('fund') || code == 403) {
+              throw Exception('X-RAY_HIT_BUSINESS_ERROR: $resStr');
            }
-           
-           // 5. 如果是 not_found (404)，说明网址对了，但当前尝试的 ID 不对。代码会继续 for 循环，尝试传入下一个 ID！
          }
-      }
-
-      // 如果这个路由是真实存在的，且我们把所有疑似 ID 都试了一遍依然不成功，那就直接把真实的错误（比如 not_found）抛给界面
-      if (routeExists && bestErr != null) {
-         throw bestErr;
       }
     }
 
-    throw Exception('未匹配到有效的购买接口，请确认后端插件已启用 API 支持。');
+    throw Exception('X-RAY_LOG:\n\n' + traceLog.join('\n'));
   }
 
   Future<void> tipPost(int postId, int amount) async {
