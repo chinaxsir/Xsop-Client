@@ -143,14 +143,13 @@ class ApiClient {
     return '';
   }
 
-  // [精准绝杀：完全照搬您网页端抓包抓到的真实请求路径与结构]
+  // [终极防御：拆包验毒，粉碎 Ziiven 插件的“假成功”骗局]
   Future<void> buyPost(List<String> possibleIds, int discussionId, int postId) async {
     DioException? bestErr;
 
-    // 1. 优先执行 Ziiven 专属请求通道（完全匹配您的截图）
     final ziivenUrl = '/api/pay-to-read/payment/pay';
     final ziivenPayloads = [
-      {"id": discussionId.toString()}, // 绝大多数情况下它只认这个格式
+      {"id": discussionId.toString()}, 
       {"id": postId.toString()},
       {"discussionId": discussionId.toString()},
       {"data": {"attributes": {"id": discussionId.toString()}}},
@@ -158,22 +157,48 @@ class ApiClient {
 
     for (var p in ziivenPayloads) {
        try {
-         await _dio.post(ziivenUrl, data: p);
-         return; // 购买成功！201 Created
+         final response = await _dio.post(ziivenUrl, data: p);
+         
+         // 🚨 核心阻击：哪怕网络是 200，也要拆开数据包检查里面有没有藏着毒！
+         final resData = response.data;
+         if (resData != null) {
+            final resStr = resData.toString().toLowerCase();
+            // Ziiven 插件经常把报错写在 status 或者 success 字段里
+            if (resStr.contains('error') || 
+                resStr.contains('"success":false') || 
+                resStr.contains('不足') || 
+                resStr.contains('fund')) {
+                // 如果发现毒药，手动引爆异常，阻断假成功！
+                throw DioException(
+                   requestOptions: response.requestOptions,
+                   response: response,
+                   error: 'FALSE_POSITIVE_INTERCEPTED'
+                );
+            }
+         }
+         return; // 拆包验毒通过，才是真的购买成功！
+
        } on DioException catch (e) {
          final code = e.response?.statusCode;
-         if (code == 404 || code == 405) continue; // 如果因为其他原因路由不存在，继续保底流程
+         if (code == 404 || code == 405) continue; 
 
          bestErr = e;
          final resStr = e.response?.data?.toString() ?? '';
-         // 抓到余额不足等核心拦截，不再往下测
-         if (RegExp(r'不足|enough|余额|fund|权限|不能|支付|buy|XSD|积分|金币|购买|XSD', caseSensitive: false).hasMatch(resStr) || code == 403) {
+         
+         if (RegExp(r'不足|enough|余额|fund|权限|不能|支付|buy|XSD|积分|金币|购买|XSD', caseSensitive: false).hasMatch(resStr) || 
+             code == 403 || 
+             e.error == 'FALSE_POSITIVE_INTERCEPTED') {
+            
+            // 将内部毒药提取成人类能看懂的语言
+            if (e.error == 'FALSE_POSITIVE_INTERCEPTED') {
+               throw Exception('余额不足或操作受限。');
+            }
             throw e;
          }
        }
     }
 
-    // 2. 如果上面 Ziiven 的专属通道没走通，保留原有的通用探针作为兜底防御网
+    // 保底通用探针（同样加入拆包验毒机制）
     final templates = [
       '/api/paytoread/{id}',
       '/api/pay-to-read/{id}',
@@ -190,8 +215,15 @@ class ApiClient {
       for (var id in possibleIds) {
          final ep = tmpl.replaceAll('{id}', id);
          try {
-           await _dio.post(ep, data: {"data": {}});
+           final response = await _dio.post(ep, data: {"data": {}});
+           
+           // 保底探针也要验毒
+           final resStr = response.data?.toString().toLowerCase() ?? '';
+           if (resStr.contains('error') || resStr.contains('"success":false') || resStr.contains('不足')) {
+                throw DioException(requestOptions: response.requestOptions, response: response, error: 'FALSE_POSITIVE_INTERCEPTED');
+           }
            return; 
+
          } on DioException catch (e) {
            final errCode = _extractErrorCode(e.response?.data);
            final code = e.response?.statusCode;
@@ -210,11 +242,19 @@ class ApiClient {
 
            if (code == 422 || errCode == 'validation_error') {
                try {
-                  await _dio.post(ep, data: {"data": {"type": "paytoread", "attributes": {}}});
+                  final r2 = await _dio.post(ep, data: {"data": {"type": "paytoread", "attributes": {}}});
+                  final r2Str = r2.data?.toString().toLowerCase() ?? '';
+                  if (r2Str.contains('error') || r2Str.contains('"success":false') || r2Str.contains('不足')) {
+                     throw DioException(requestOptions: r2.requestOptions, response: r2, error: 'FALSE_POSITIVE_INTERCEPTED');
+                  }
                   return;
                } on DioException catch (e2) {
                   bestErr = e2;
                }
+           }
+
+           if (bestErr?.error == 'FALSE_POSITIVE_INTERCEPTED') {
+              throw Exception('余额不足或操作受限。');
            }
 
            if (errCode != 'not_found' && code != 404 && code != 422) {
@@ -224,11 +264,15 @@ class ApiClient {
       }
 
       if (routeExists && bestErr != null) {
+         if (bestErr.error == 'FALSE_POSITIVE_INTERCEPTED') throw Exception('余额不足或操作受限。');
          throw bestErr;
       }
     }
 
-    if (bestErr != null) throw bestErr;
+    if (bestErr != null) {
+       if (bestErr.error == 'FALSE_POSITIVE_INTERCEPTED') throw Exception('余额不足或操作受限。');
+       throw bestErr;
+    }
     throw Exception('未匹配到有效的购买接口，请确认后端插件已启用 API 支持。');
   }
 
