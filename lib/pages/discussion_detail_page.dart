@@ -387,24 +387,28 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
     }
   }
 
-  // [HTML 免疫隔离罩]：阻断 B 站等恶意 iframe 的自动播放与夺屏脚本
+  // [免疫隔离罩：暴力剥离失控的 iframe，变成安全的点击按钮]
   String _sanitizeHtmlForVideo(String htmlContent) {
     if (htmlContent.isEmpty) return htmlContent;
     
-    // 强制关闭所有 iframe 的自动播放权限
-    String safeHtml = htmlContent.replaceAll(RegExp(r'autoplay=1'), 'autoplay=0');
-    safeHtml = safeHtml.replaceAll(RegExp(r'autoplay="true"'), 'autoplay="false"');
-    
-    // 给 iframe 套上沙盒属性，斩断它拉起全屏或执行跳出脚本的能力
-    safeHtml = safeHtml.replaceAllMapped(
-      RegExp(r'<iframe([^>]+)>', caseSensitive: false), 
+    // 正则表达式：精准捕获所有的 iframe 标签，并将它的 src 地址提取出来
+    String safeHtml = htmlContent.replaceAllMapped(
+      RegExp(r'<iframe[^>]+src="([^"]+)"[^>]*>.*?</iframe>', caseSensitive: false),
       (match) {
-        String attributes = match.group(1) ?? '';
-        // 增加宽度适应，防止超出屏幕变白屏
-        if (!attributes.contains('width')) attributes += ' width="100%"';
-        // 增加沙盒限制
-        if (!attributes.contains('sandbox')) attributes += ' sandbox="allow-scripts allow-same-origin"';
-        return '<iframe$attributes>';
+        String url = match.group(1) ?? '';
+        // 修复部分缺少 http/https 的残缺链接（比如 B站常用的 //player.bilibili...）
+        if (url.startsWith('//')) {
+           url = 'https:$url';
+        }
+        
+        // 【偷梁换柱】：把原来会破坏屏幕的视频代码，直接变成一段漂亮且绝对安全的原生 HTML 点击块！
+        // 这样底层的 HtmlWidget 就能原生处理点击跳转，彻底切断 B站流氓脚本！
+        return '''
+        <div style="background-color: #f8f9fa; padding: 20px; border-radius: 12px; text-align: center; border: 1px solid #e9ecef; margin: 16px 0;">
+          <p style="margin: 0 0 12px 0; color: #495057; font-size: 15px; font-weight: bold;">▶️ 本帖包含外部视频</p>
+          <a href="$url" style="display: inline-block; background-color: #00a1d6; color: white; padding: 10px 24px; border-radius: 6px; text-decoration: none; font-weight: bold; font-size: 14px;">在浏览器中安全播放</a>
+        </div>
+        ''';
       }
     );
     return safeHtml;
@@ -489,8 +493,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                                                 if (mounted) {
                                                   final eStr = e.toString();
                                                   Navigator.pop(ctx); 
-                                                  
-                                                  // 剥离 Exception 前缀，让提示更干净
                                                   String pureMsg = eStr.replaceAll('Exception: ', '');
                                                   ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(pureMsg), duration: const Duration(seconds: 4)));
                                                 }
@@ -677,7 +679,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
              }
         }
 
-        // 应用 HTML 防御罩，镇压失控视频
+        // 🔥 将原生的 HTML 丢进免疫罩进行脱水净化，彻底镇压视频 iframe
         final safeHtml = _sanitizeHtmlForVideo(htmlContent);
 
         return Container(
@@ -719,7 +721,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                  _buildPayBlock(payAmount, buyersCount, possibleIds.toList(), discussionId, postId) 
               else 
                  HtmlWidget(
-                    safeHtml, 
+                    safeHtml, // 使用净化后的 HTML 代码
                     textStyle: const TextStyle(fontSize: 16, height: 1.6, color: Colors.black87),
                  ),
                  
