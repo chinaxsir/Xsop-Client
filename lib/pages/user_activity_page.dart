@@ -116,11 +116,10 @@ class _UserActivityPageState extends State<UserActivityPage> {
         _customEmptyMessage = '无回复记录。';
       } 
       else if (widget.activityType == 'warnings') {
+        // [数据隔离引擎重构]：剔除管理员“发给别人”的无关警告，只精准请求“别人发给我”的真实自身警告！
         final results = await Future.wait([
-          _safeFetch('/api/warnings/$uid', {'include': 'addedByUser,user,post'}),
           _safeFetch('/api/warnings', {'filter[user]': uid, 'include': 'addedByUser,user,post'}),
-          _safeFetch('/api/warnings', {'filter[addedByUser]': uid, 'include': 'addedByUser,user,post'}),
-          _safeFetch('/api/users/$uid', {'include': 'warnings'}),
+          _safeFetch('/api/users/$uid', {'include': 'warnings,warnings.addedByUser,warnings.post'}),
         ]);
 
         final Map<String, dynamic> uniqueMap = {};
@@ -134,16 +133,24 @@ class _UserActivityPageState extends State<UserActivityPage> {
           }
         }
 
-        _items = uniqueMap.values.toList();
-        _customEmptyMessage = '暂无站务警告。';
+        // 第二道防线：即使服务器发来了混杂数据，客户端强行剔除那些 targetUser 不是当前账号的警告。
+        final List<dynamic> finalItems = [];
+        for (var item in uniqueMap.values) {
+           final targetUserId = item['relationships']?['user']?['data']?['id']?.toString() ?? item['attributes']?['userId']?.toString();
+           if (targetUserId == uid) {
+              finalItems.add(item);
+           }
+        }
+        
+        _items = finalItems;
+        _customEmptyMessage = '暂无站务警告记录。';
       } 
       else if (widget.activityType == 'money-log') {
-        // [核心修改] 依照抓包数据，直连底层真实的积分记录接口
         final endpoints = ['/api/money-log', '/api/users/$uid/moneyHistory', '/api/moneyHistory'];
         
         List<Future<Map<String, dynamic>>> tasks = [];
         for (var ep in endpoints) {
-           tasks.add(_safeFetch(ep, {'page[offset]': 0})); // 模拟 Web 请求参数
+           tasks.add(_safeFetch(ep, {'page[offset]': 0})); 
            tasks.add(_safeFetch(ep, {'filter[user]': uid}));
         }
 
@@ -167,7 +174,6 @@ class _UserActivityPageState extends State<UserActivityPage> {
            final parsedDate = _parseFlexibleDate(timeStr);
            if (parsedDate == null) continue;
            
-           // 去重机制
            final fingerprint = '${item['id']}_${parsedDate.millisecondsSinceEpoch}';
            if (!seenKeys.contains(fingerprint)) {
                seenKeys.add(fingerprint);
@@ -292,7 +298,7 @@ class _UserActivityPageState extends State<UserActivityPage> {
         final item = _items[index];
         
         if (widget.activityType == 'warnings') return _buildWarningItem(item);
-        if (widget.activityType == 'money-log') return _buildMoneyLogItem(item); // 专属积分记录卡片
+        if (widget.activityType == 'money-log') return _buildMoneyLogItem(item); 
         if (widget.activityType == 'posts') return _buildPostItem(item);
         
         return _buildDefaultItem(item);
@@ -300,11 +306,9 @@ class _UserActivityPageState extends State<UserActivityPage> {
     );
   }
 
-  // [全新 UI] 完美适配网页版积分记录的核心字段（日期、变动金额、余额、原因）
   Widget _buildMoneyLogItem(Map<String, dynamic> item) {
     final attrs = item['attributes'] ?? {};
     
-    // 适配不同插件可能的金额字段命名
     final amountStr = attrs['money']?.toString() ?? attrs['amount']?.toString() ?? attrs['balance_delta']?.toString() ?? '0';
     final balanceStr = attrs['balance']?.toString() ?? attrs['currentBalance']?.toString() ?? '-';
     final reason = attrs['reason']?.toString() ?? attrs['description']?.toString() ?? attrs['source']?.toString() ?? '系统操作';
@@ -314,7 +318,6 @@ class _UserActivityPageState extends State<UserActivityPage> {
     if (timeStr != null) {
       final parsedDate = _parseFlexibleDate(timeStr);
       if (parsedDate != null) {
-        // 格式化为网页版类似的精准时间：YYYY/MM/DD HH:mm:ss
         dateDisplay = '${parsedDate.year}/${parsedDate.month.toString().padLeft(2, '0')}/${parsedDate.day.toString().padLeft(2, '0')} ${parsedDate.hour.toString().padLeft(2, '0')}:${parsedDate.minute.toString().padLeft(2, '0')}:${parsedDate.second.toString().padLeft(2, '0')}';
       }
     }
@@ -393,11 +396,11 @@ class _UserActivityPageState extends State<UserActivityPage> {
     final addedByUser = _getIncluded('users', addedByUserId);
     final targetUser = _getIncluded('users', targetUserId);
     
-    final adminName = addedByUser?['attributes']?['displayName'] ?? addedByUser?['attributes']?['username'] ?? '管理员';
-    final targetName = targetUser?['attributes']?['displayName'] ?? targetUser?['attributes']?['username'] ?? '用户';
+    final adminName = addedByUser?['attributes']?['displayName'] ?? addedByUser?['attributes']?['username'] ?? '系统管理员';
+    final targetName = targetUser?['attributes']?['displayName'] ?? targetUser?['attributes']?['username'] ?? '您';
 
     final strikes = attrs['strikes'] ?? 0;
-    final comment = attrs['publicComment'] ?? attrs['reason'] ?? '违规操作。';
+    final comment = attrs['publicComment'] ?? attrs['reason'] ?? '由于违规行为收到警告。';
     final timeStr = attrs['createdAt']?.toString();
     
     String timeDisplay = '未知';
@@ -417,17 +420,17 @@ class _UserActivityPageState extends State<UserActivityPage> {
         children: [
           Row(
             children: [
-              Icon(Icons.warning, color: Colors.red.shade400, size: 18),
+              Icon(Icons.warning_amber_rounded, color: Colors.red.shade400, size: 20),
               const SizedBox(width: 8),
-              Text('警告记 $strikes 分', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+              Text('收到警告记 $strikes 分', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
             ],
           ),
           const SizedBox(height: 12),
-          Text(comment, style: const TextStyle(color: Colors.black87, fontSize: 14)),
+          Text(comment, style: const TextStyle(color: Colors.black87, fontSize: 14, height: 1.5)),
           const SizedBox(height: 12),
-          Text('$adminName 警告了 $targetName', style: TextStyle(color: Colors.grey.shade600, fontSize: 12, fontWeight: FontWeight.bold)),
+          Text('下发方: $adminName', style: TextStyle(color: Colors.grey.shade600, fontSize: 12, fontWeight: FontWeight.bold)),
           const SizedBox(height: 6),
-          Text('时间：$timeDisplay', style: TextStyle(color: Colors.grey.shade400, fontSize: 11)),
+          Text('时间: $timeDisplay', style: TextStyle(color: Colors.grey.shade400, fontSize: 11)),
         ],
       ),
     );
