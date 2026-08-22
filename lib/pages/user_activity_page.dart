@@ -49,6 +49,12 @@ class _UserActivityPageState extends State<UserActivityPage> {
     return DateTime.tryParse(s);
   }
 
+  // [HTML 净化器]：强力剥离 <a href="..."> 等所有前端标签代码
+  String _stripHtmlTags(String htmlString) {
+    RegExp exp = RegExp(r"<[^>]*>", multiLine: true, caseSensitive: true);
+    return htmlString.replaceAll(exp, '').trim();
+  }
+
   Future<Map<String, dynamic>> _safeFetch(String endpoint, Map<String, dynamic> query) async {
     try {
       return await widget.api.getDynamicList(endpoint, queryParameters: query);
@@ -116,7 +122,6 @@ class _UserActivityPageState extends State<UserActivityPage> {
         _customEmptyMessage = '无回复记录。';
       } 
       else if (widget.activityType == 'warnings') {
-        // [数据隔离引擎重构]：剔除管理员“发给别人”的无关警告，只精准请求“别人发给我”的真实自身警告！
         final results = await Future.wait([
           _safeFetch('/api/warnings', {'filter[user]': uid, 'include': 'addedByUser,user,post'}),
           _safeFetch('/api/users/$uid', {'include': 'warnings,warnings.addedByUser,warnings.post'}),
@@ -133,7 +138,6 @@ class _UserActivityPageState extends State<UserActivityPage> {
           }
         }
 
-        // 第二道防线：即使服务器发来了混杂数据，客户端强行剔除那些 targetUser 不是当前账号的警告。
         final List<dynamic> finalItems = [];
         for (var item in uniqueMap.values) {
            final targetUserId = item['relationships']?['user']?['data']?['id']?.toString() ?? item['attributes']?['userId']?.toString();
@@ -311,7 +315,10 @@ class _UserActivityPageState extends State<UserActivityPage> {
     
     final amountStr = attrs['money']?.toString() ?? attrs['amount']?.toString() ?? attrs['balance_delta']?.toString() ?? '0';
     final balanceStr = attrs['balance']?.toString() ?? attrs['currentBalance']?.toString() ?? '-';
-    final reason = attrs['reason']?.toString() ?? attrs['description']?.toString() ?? attrs['source']?.toString() ?? '系统操作';
+    
+    // [应用 HTML 净化器]：让带有超链接 <a> 标签的源码秒变纯净中文
+    final rawReason = attrs['reason']?.toString() ?? attrs['description']?.toString() ?? attrs['source']?.toString() ?? '系统操作';
+    final cleanReason = _stripHtmlTags(rawReason);
     
     final timeStr = attrs['createdAt']?.toString();
     String dateDisplay = '未知时间';
@@ -358,7 +365,7 @@ class _UserActivityPageState extends State<UserActivityPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(reason, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14, color: Colors.black87, height: 1.4)),
+                    Text(cleanReason, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14, color: Colors.black87, height: 1.4)),
                     const SizedBox(height: 6),
                     Row(
                       children: [
