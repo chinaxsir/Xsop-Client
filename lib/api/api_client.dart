@@ -143,18 +143,14 @@ class ApiClient {
     return '';
   }
 
-  // [协议升级：先用 GET 探路激活，再用 POST 真实扣款]
+  // [修复防误伤引擎：只认真实错误，放行合法交易]
   Future<void> buyPost(List<String> possibleIds, int discussionId, int postId) async {
     DioException? bestErr;
 
-    // 1. 前置验证协议 (GET)：唤醒后端的订单会话
     try {
        await _dio.get('/api/pay-to-read/payment/', queryParameters: {'id': discussionId});
-    } catch (_) {
-       // 不管失败与否，强行继续下一步，防止有些版本不需要 GET
-    }
+    } catch (_) {}
 
-    // 2. 核心扣款协议 (POST)
     final ziivenUrl = '/api/pay-to-read/payment/pay';
     final ziivenPayloads = [
       {"id": discussionId.toString()}, 
@@ -167,14 +163,15 @@ class ApiClient {
        try {
          final response = await _dio.post(ziivenUrl, data: p);
          
-         // 拆包验毒
          final resData = response.data;
          if (resData != null) {
             final resStr = resData.toString().toLowerCase();
-            if (resStr.contains('error') || 
-                resStr.contains('"success":false') || 
-                resStr.contains('不足') || 
-                resStr.contains('fund')) {
+            // [极其关键的改动]：取消包含 'error' 或 'false' 的判定，防止把 {"success": true, "error": null} 误杀！
+            // 仅对明确代表业务失败的中文提示进行精准阻击！
+            if (resStr.contains('余额不足') || 
+                resStr.contains('积分不足') || 
+                resStr.contains('未登录') || 
+                resStr.contains('没有权限')) {
                 throw DioException(
                    requestOptions: response.requestOptions,
                    response: response,
@@ -182,7 +179,7 @@ class ApiClient {
                 );
             }
          }
-         return; // 购买成功
+         return; // 购买成功，放行！
 
        } on DioException catch (e) {
          final code = e.response?.statusCode;
@@ -203,7 +200,6 @@ class ApiClient {
        }
     }
 
-    // 3. 通用保底探针
     final templates = [
       '/api/paytoread/{id}',
       '/api/pay-to-read/{id}',
@@ -216,14 +212,13 @@ class ApiClient {
 
     for (var tmpl in templates) {
       bool routeExists = false;
-
       for (var id in possibleIds) {
          final ep = tmpl.replaceAll('{id}', id);
          try {
            final response = await _dio.post(ep, data: {"data": {}});
            
            final resStr = response.data?.toString().toLowerCase() ?? '';
-           if (resStr.contains('error') || resStr.contains('"success":false') || resStr.contains('不足')) {
+           if (resStr.contains('余额不足') || resStr.contains('积分不足')) {
                 throw DioException(requestOptions: response.requestOptions, response: response, error: 'FALSE_POSITIVE_INTERCEPTED');
            }
            return; 
@@ -248,7 +243,7 @@ class ApiClient {
                try {
                   final r2 = await _dio.post(ep, data: {"data": {"type": "paytoread", "attributes": {}}});
                   final r2Str = r2.data?.toString().toLowerCase() ?? '';
-                  if (r2Str.contains('error') || r2Str.contains('"success":false') || r2Str.contains('不足')) {
+                  if (r2Str.contains('余额不足') || r2Str.contains('积分不足')) {
                      throw DioException(requestOptions: r2.requestOptions, response: r2, error: 'FALSE_POSITIVE_INTERCEPTED');
                   }
                   return;
