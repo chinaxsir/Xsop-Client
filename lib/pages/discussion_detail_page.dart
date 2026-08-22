@@ -87,7 +87,17 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
     } catch (e) {
       if (mounted) {
         setState(() {
-          _error = '出错了，请重试。';
+          if (e is DioException) {
+            String msg = '加载失败 (HTTP ${e.response?.statusCode})';
+            try {
+              if (e.response?.data != null) {
+                 msg += '\n\n详细信息:\n${e.response?.data}';
+              }
+            } catch (_) {}
+            _error = msg;
+          } else {
+            _error = '未知错误：${e.toString()}';
+          }
           _isLoading = false;
         });
       }
@@ -98,7 +108,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
     final post = _posts[index];
     final postId = post['id'];
     
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('正在加载...')));
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('正在获取内容...')));
     String rawContent = post['attributes']?['content']?.toString() ?? '';
     
     try {
@@ -167,9 +177,11 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                             try {
                                final rawData = e.response?.data;
                                if (rawData != null && rawData is Map && rawData['errors'] != null && rawData['errors'].isNotEmpty) {
-                                 errMsg = rawData['errors'][0]['detail'] ?? '操作失败';
+                                 errMsg = rawData['errors'][0]['detail'] ?? '失败原因: ${rawData['errors'][0]['code']}';
                                }
                             } catch (_) {}
+                         } else {
+                            errMsg = e.toString().replaceAll('Exception: ', '');
                          }
                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg), duration: const Duration(seconds: 4)));
                          Navigator.pop(context); 
@@ -374,6 +386,29 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
       _loadDiscussionDetail();
     }
   }
+
+  // [HTML 免疫隔离罩]：阻断 B 站等恶意 iframe 的自动播放与夺屏脚本
+  String _sanitizeHtmlForVideo(String htmlContent) {
+    if (htmlContent.isEmpty) return htmlContent;
+    
+    // 强制关闭所有 iframe 的自动播放权限
+    String safeHtml = htmlContent.replaceAll(RegExp(r'autoplay=1'), 'autoplay=0');
+    safeHtml = safeHtml.replaceAll(RegExp(r'autoplay="true"'), 'autoplay="false"');
+    
+    // 给 iframe 套上沙盒属性，斩断它拉起全屏或执行跳出脚本的能力
+    safeHtml = safeHtml.replaceAllMapped(
+      RegExp(r'<iframe([^>]+)>', caseSensitive: false), 
+      (match) {
+        String attributes = match.group(1) ?? '';
+        // 增加宽度适应，防止超出屏幕变白屏
+        if (!attributes.contains('width')) attributes += ' width="100%"';
+        // 增加沙盒限制
+        if (!attributes.contains('sandbox')) attributes += ' sandbox="allow-scripts allow-same-origin"';
+        return '<iframe$attributes>';
+      }
+    );
+    return safeHtml;
+  }
   
   Widget _buildPayBlock(String payAmount, String buyersCount, List<String> possibleIds, int discussionId, int postId) {
     return Container(
@@ -446,35 +481,18 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                                                 await widget.api.buyPost(possibleIds, discussionId, postId);
                                                 if (mounted) {
                                                   Navigator.pop(ctx); 
-                                                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('操作成功。')));
+                                                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('购买成功！')));
                                                   setState(() => _isLoading = true);
                                                   _loadDiscussionDetail(); 
                                                 }
                                               } catch (e) {
                                                 if (mounted) {
-                                                  String errMsg = '操作失败';
                                                   final eStr = e.toString();
-
-                                                  if (eStr.contains('API_ROUTE_UNMATCHED')) {
-                                                     errMsg = '未找到有效接口。';
-                                                  } else if (e is DioException) {
-                                                     try {
-                                                       final rawData = e.response?.data;
-                                                       if (rawData != null && rawData is Map) {
-                                                         if (rawData['errors'] != null && rawData['errors'] is List && rawData['errors'].isNotEmpty) {
-                                                           final errDetail = rawData['errors'][0]['detail'] ?? rawData['errors'][0]['code'];
-                                                           if (errDetail != null) errMsg = errDetail;
-                                                         } else if (rawData['message'] != null) {
-                                                           errMsg = rawData['message'];
-                                                         }
-                                                       }
-                                                     } catch (_) {}
-                                                  } else {
-                                                     errMsg = eStr.replaceAll('Exception: ', '');
-                                                  }
+                                                  Navigator.pop(ctx); 
                                                   
-                                                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg), duration: const Duration(seconds: 4)));
-                                                  Navigator.pop(ctx);
+                                                  // 剥离 Exception 前缀，让提示更干净
+                                                  String pureMsg = eStr.replaceAll('Exception: ', '');
+                                                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(pureMsg), duration: const Duration(seconds: 4)));
                                                 }
                                               } finally {
                                                 if (mounted) setStateDialog(() => isSubmitting = false);
@@ -659,6 +677,9 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
              }
         }
 
+        // 应用 HTML 防御罩，镇压失控视频
+        final safeHtml = _sanitizeHtmlForVideo(htmlContent);
+
         return Container(
           color: Colors.white,
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
@@ -697,7 +718,10 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
               if (isPayProtected) 
                  _buildPayBlock(payAmount, buyersCount, possibleIds.toList(), discussionId, postId) 
               else 
-                 HtmlWidget(htmlContent, textStyle: const TextStyle(fontSize: 16, height: 1.6, color: Colors.black87)),
+                 HtmlWidget(
+                    safeHtml, 
+                    textStyle: const TextStyle(fontSize: 16, height: 1.6, color: Colors.black87),
+                 ),
                  
               const SizedBox(height: 12),
               Row(
