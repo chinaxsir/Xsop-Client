@@ -143,10 +143,18 @@ class ApiClient {
     return '';
   }
 
-  // [终极防御：拆包验毒，粉碎 Ziiven 插件的“假成功”骗局]
+  // [协议升级：先用 GET 探路激活，再用 POST 真实扣款]
   Future<void> buyPost(List<String> possibleIds, int discussionId, int postId) async {
     DioException? bestErr;
 
+    // 1. 前置验证协议 (GET)：唤醒后端的订单会话
+    try {
+       await _dio.get('/api/pay-to-read/payment/', queryParameters: {'id': discussionId});
+    } catch (_) {
+       // 不管失败与否，强行继续下一步，防止有些版本不需要 GET
+    }
+
+    // 2. 核心扣款协议 (POST)
     final ziivenUrl = '/api/pay-to-read/payment/pay';
     final ziivenPayloads = [
       {"id": discussionId.toString()}, 
@@ -159,16 +167,14 @@ class ApiClient {
        try {
          final response = await _dio.post(ziivenUrl, data: p);
          
-         // 🚨 核心阻击：哪怕网络是 200，也要拆开数据包检查里面有没有藏着毒！
+         // 拆包验毒
          final resData = response.data;
          if (resData != null) {
             final resStr = resData.toString().toLowerCase();
-            // Ziiven 插件经常把报错写在 status 或者 success 字段里
             if (resStr.contains('error') || 
                 resStr.contains('"success":false') || 
                 resStr.contains('不足') || 
                 resStr.contains('fund')) {
-                // 如果发现毒药，手动引爆异常，阻断假成功！
                 throw DioException(
                    requestOptions: response.requestOptions,
                    response: response,
@@ -176,7 +182,7 @@ class ApiClient {
                 );
             }
          }
-         return; // 拆包验毒通过，才是真的购买成功！
+         return; // 购买成功
 
        } on DioException catch (e) {
          final code = e.response?.statusCode;
@@ -189,7 +195,6 @@ class ApiClient {
              code == 403 || 
              e.error == 'FALSE_POSITIVE_INTERCEPTED') {
             
-            // 将内部毒药提取成人类能看懂的语言
             if (e.error == 'FALSE_POSITIVE_INTERCEPTED') {
                throw Exception('余额不足或操作受限。');
             }
@@ -198,7 +203,7 @@ class ApiClient {
        }
     }
 
-    // 保底通用探针（同样加入拆包验毒机制）
+    // 3. 通用保底探针
     final templates = [
       '/api/paytoread/{id}',
       '/api/pay-to-read/{id}',
@@ -217,7 +222,6 @@ class ApiClient {
          try {
            final response = await _dio.post(ep, data: {"data": {}});
            
-           // 保底探针也要验毒
            final resStr = response.data?.toString().toLowerCase() ?? '';
            if (resStr.contains('error') || resStr.contains('"success":false') || resStr.contains('不足')) {
                 throw DioException(requestOptions: response.requestOptions, response: response, error: 'FALSE_POSITIVE_INTERCEPTED');
