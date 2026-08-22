@@ -7,8 +7,14 @@ import 'package:xsop_forum/pages/user_activity_page.dart';
 
 class UserProfilePage extends StatefulWidget {
   final ApiClient api;
+  // [修复编译错误 1]：接收 home_page 传来的 user 参数
+  final FlarumUser? user; 
 
-  const UserProfilePage({super.key, required this.api});
+  const UserProfilePage({
+    super.key, 
+    required this.api,
+    this.user, 
+  });
 
   @override
   State<UserProfilePage> createState() => _UserProfilePageState();
@@ -18,10 +24,18 @@ class _UserProfilePageState extends State<UserProfilePage> {
   bool _isLoading = true;
   FlarumUser? _user;
   String? _error;
+  
+  // [修复编译错误 2]：将动态数据剥离出来，用独立的变量存储，避开 FlarumUser 严格的数据模型
+  String _balance = '0';
+  int _warningCount = 0;
 
   @override
   void initState() {
     super.initState();
+    // 如果外部传了初步的用户信息，先显示出来
+    if (widget.user != null) {
+      _user = widget.user;
+    }
     _loadUserProfile();
   }
 
@@ -35,10 +49,35 @@ class _UserProfilePageState extends State<UserProfilePage> {
         });
         return;
       }
+      
+      // 拉取底层最完整的用户 JSON 数据
       final data = await widget.api.getUser(userId);
+      
       if (mounted) {
         setState(() {
           _user = parseUser(data, widget.api.baseUrl);
+          
+          // [绕过模型直接提取属性]：直接从原始 data 字典里掏出我们需要的数据
+          try {
+             final attrs = data['data']?['attributes'] ?? {};
+             
+             // 1. 提取余额
+             if (attrs.containsKey('money')) {
+                _balance = attrs['money'].toString();
+             }
+             
+             // 2. 提取警告次数
+             if (attrs['warningCount'] != null) {
+                _warningCount = int.tryParse(attrs['warningCount'].toString()) ?? 0;
+             } else if (attrs['strikes'] != null) {
+                _warningCount = int.tryParse(attrs['strikes'].toString()) ?? 0;
+             } else {
+                _warningCount = 0;
+             }
+          } catch (_) {
+             // 容错处理
+          }
+
           _isLoading = false;
         });
       }
@@ -66,6 +105,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
         ),
       ),
     );
+    // 返回个人中心时，后台静默刷新数据
     if (mounted) {
       _loadUserProfile();
     }
@@ -96,10 +136,10 @@ class _UserProfilePageState extends State<UserProfilePage> {
   }
 
   Widget _buildBody() {
-    if (_isLoading) {
+    if (_isLoading && _user == null) {
       return const Center(child: CircularProgressIndicator());
     }
-    if (_error != null || _user == null) {
+    if (_error != null && _user == null) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -113,21 +153,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
     }
 
     final displayName = _user!.displayName.isNotEmpty ? _user!.displayName : _user!.username;
-    
-    // 提取余额数据 (XSD)
-    String balance = '0';
-    if (_user!.attributes.containsKey('money')) {
-      balance = _user!.attributes['money'].toString();
-    }
-
-    // 深度提取警告次数，实现实时动态角标
-    int warningCount = 0;
-    if (_user!.attributes['warningCount'] != null) {
-      warningCount = int.tryParse(_user!.attributes['warningCount'].toString()) ?? 0;
-    } else if (_user!.attributes['strikes'] != null) {
-      warningCount = int.tryParse(_user!.attributes['strikes'].toString()) ?? 0;
-    }
-    String warningTitle = warningCount > 0 ? '站务警告 ($warningCount)' : '站务警告';
+    String warningTitle = _warningCount > 0 ? '站务警告 ($_warningCount)' : '站务警告';
 
     return RefreshIndicator(
       onRefresh: _loadUserProfile,
@@ -176,7 +202,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
                       const SizedBox(width: 6),
                       const Text('0', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                       const SizedBox(width: 12),
-                      Text('$balance XSD', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                      Text('$_balance XSD', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                     ],
                   ),
                 ),
