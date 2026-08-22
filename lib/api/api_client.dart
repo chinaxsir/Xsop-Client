@@ -143,136 +143,103 @@ class ApiClient {
     return '';
   }
 
-  // [修复防误伤引擎：只认真实错误，放行合法交易]
+  // [终极防御：带“回马枪验证”的购买引擎，彻底粉碎假成功]
   Future<void> buyPost(List<String> possibleIds, int discussionId, int postId) async {
-    DioException? bestErr;
+    String? fallbackErrorMsg;
 
+    // 1. 激活后端订单会话 (GET)
     try {
        await _dio.get('/api/pay-to-read/payment/', queryParameters: {'id': discussionId});
     } catch (_) {}
 
+    // 2. 真实执行购买请求
     final ziivenUrl = '/api/pay-to-read/payment/pay';
+    // [严谨：强制使用 int 格式，防止 PHP 后端校验拦截字符串导致静默失败]
     final ziivenPayloads = [
-      {"id": discussionId.toString()}, 
-      {"id": postId.toString()},
-      {"discussionId": discussionId.toString()},
-      {"data": {"attributes": {"id": discussionId.toString()}}},
+      {"discussion_id": discussionId}, 
+      {"id": discussionId},
+      {"post_id": postId},
+      {"data": {"attributes": {"discussion_id": discussionId}}},
+      {"data": {"attributes": {"id": discussionId}}},
     ];
 
     for (var p in ziivenPayloads) {
        try {
          final response = await _dio.post(ziivenUrl, data: p);
          
-         final resData = response.data;
-         if (resData != null) {
-            final resStr = resData.toString().toLowerCase();
-            // [极其关键的改动]：取消包含 'error' 或 'false' 的判定，防止把 {"success": true, "error": null} 误杀！
-            // 仅对明确代表业务失败的中文提示进行精准阻击！
-            if (resStr.contains('余额不足') || 
-                resStr.contains('积分不足') || 
-                resStr.contains('未登录') || 
-                resStr.contains('没有权限')) {
-                throw DioException(
-                   requestOptions: response.requestOptions,
-                   response: response,
-                   error: 'FALSE_POSITIVE_INTERCEPTED'
-                );
-            }
+         // [拆包验毒] 检查服务器返回的 200 里是否隐藏了业务报错
+         if (response.data is Map) {
+             final resData = response.data as Map;
+             final status = resData['status'];
+             final msg = resData['msg'] ?? resData['message'] ?? resData['error'];
+             
+             if (status == 400 || status == 500 || status == 'error' || status == false) {
+                 fallbackErrorMsg = msg?.toString() ?? '余额不足或服务器拒绝。';
+                 continue; // 这个载荷被拒绝，换下一个试试
+             }
          }
-         return; // 购买成功，放行！
+
+         // [终极验证] 即使没有毒，我们也不信！立刻向服务器重新拉取这篇帖子的数据！
+         final verifyRes = await _dio.get('/api/discussions/$discussionId');
+         final verifyAttrs = verifyRes.data['data']?['attributes'] ?? {};
+         
+         // 只有当帖子真的变成 hasPaid = true，才是真金白银的成功！
+         final isUnlocked = (verifyAttrs['hasPaid'] == true) || (verifyAttrs['isPaid'] == true) || (verifyAttrs['canViewPaidContent'] == true);
+         
+         if (isUnlocked) {
+             return; // 终于验证成功！放行！
+         } else {
+             // 揭穿假阳性骗局！
+             fallbackErrorMsg = '操作受限：参数可能未匹配。';
+             continue; // 换个数据载荷继续撞击
+         }
 
        } on DioException catch (e) {
          final code = e.response?.statusCode;
          if (code == 404 || code == 405) continue; 
-
-         bestErr = e;
-         final resStr = e.response?.data?.toString() ?? '';
          
-         if (RegExp(r'不足|enough|余额|fund|权限|不能|支付|buy|XSD|积分|金币|购买|XSD', caseSensitive: false).hasMatch(resStr) || 
-             code == 403 || 
-             e.error == 'FALSE_POSITIVE_INTERCEPTED') {
-            
-            if (e.error == 'FALSE_POSITIVE_INTERCEPTED') {
-               throw Exception('余额不足或操作受限。');
-            }
-            throw e;
+         // 抓取真实的拦截报错
+         if (e.response?.data is Map) {
+             fallbackErrorMsg = e.response?.data['msg'] ?? e.response?.data['message'] ?? e.response?.data['error'];
          }
        }
     }
 
+    // 3. 通用探针保底（同样带有回马枪验证）
     final templates = [
       '/api/paytoread/{id}',
       '/api/pay-to-read/{id}',
-      '/api/ziiven/paytoread/{id}',
-      '/api/paytosee/{id}',
-      '/api/pay-to-see/{id}',
       '/api/discussions/{id}/pay',
-      '/api/posts/{id}/pay',
     ];
 
     for (var tmpl in templates) {
-      bool routeExists = false;
       for (var id in possibleIds) {
          final ep = tmpl.replaceAll('{id}', id);
          try {
            final response = await _dio.post(ep, data: {"data": {}});
            
-           final resStr = response.data?.toString().toLowerCase() ?? '';
-           if (resStr.contains('余额不足') || resStr.contains('积分不足')) {
-                throw DioException(requestOptions: response.requestOptions, response: response, error: 'FALSE_POSITIVE_INTERCEPTED');
+           if (response.data is Map) {
+              if (response.data['status'] == 'error' || response.data['success'] == false) continue;
            }
-           return; 
+
+           // 再次回马枪验证
+           final verifyRes = await _dio.get('/api/discussions/$discussionId');
+           final verifyAttrs = verifyRes.data['data']?['attributes'] ?? {};
+           if (verifyAttrs['hasPaid'] == true || verifyAttrs['isPaid'] == true) {
+               return; 
+           }
 
          } on DioException catch (e) {
-           final errCode = _extractErrorCode(e.response?.data);
            final code = e.response?.statusCode;
-
-           if (code == 404 && errCode == 'route_not_found') {
-             routeExists = false;
-             break; 
-           }
-           if (code == 405) {
-             routeExists = false;
-             break;
-           }
-
-           routeExists = true;
-           bestErr = e;
-
-           if (code == 422 || errCode == 'validation_error') {
-               try {
-                  final r2 = await _dio.post(ep, data: {"data": {"type": "paytoread", "attributes": {}}});
-                  final r2Str = r2.data?.toString().toLowerCase() ?? '';
-                  if (r2Str.contains('余额不足') || r2Str.contains('积分不足')) {
-                     throw DioException(requestOptions: r2.requestOptions, response: r2, error: 'FALSE_POSITIVE_INTERCEPTED');
-                  }
-                  return;
-               } on DioException catch (e2) {
-                  bestErr = e2;
-               }
-           }
-
-           if (bestErr?.error == 'FALSE_POSITIVE_INTERCEPTED') {
-              throw Exception('余额不足或操作受限。');
-           }
-
-           if (errCode != 'not_found' && code != 404 && code != 422) {
-              throw bestErr!;
+           if (code == 404 || code == 405) continue;
+           if (e.response?.data is Map) {
+               fallbackErrorMsg = e.response?.data['msg'] ?? e.response?.data['message'];
            }
          }
       }
-
-      if (routeExists && bestErr != null) {
-         if (bestErr.error == 'FALSE_POSITIVE_INTERCEPTED') throw Exception('余额不足或操作受限。');
-         throw bestErr;
-      }
     }
 
-    if (bestErr != null) {
-       if (bestErr.error == 'FALSE_POSITIVE_INTERCEPTED') throw Exception('余额不足或操作受限。');
-       throw bestErr;
-    }
-    throw Exception('未匹配到有效的购买接口，请确认后端插件已启用 API 支持。');
+    throw Exception(fallbackErrorMsg ?? '余额不足或操作受限。');
   }
 
   Future<void> tipPost(int postId, int amount) async {
