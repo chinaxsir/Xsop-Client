@@ -39,7 +39,6 @@ class _UserActivityPageState extends State<UserActivityPage> {
     _loadData();
   }
 
-  // [新增防御工具]：兼容某些插件返回奇葩整型时间戳导致崩溃的问题
   DateTime? _parseFlexibleDate(String? s) {
     if (s == null || s.trim().isEmpty || s == 'null') return null;
     final num = int.tryParse(s);
@@ -130,7 +129,6 @@ class _UserActivityPageState extends State<UserActivityPage> {
             if (i['id'] != null) uniqueMap[i['id'].toString()] = i;
           }
           _included.addAll(_extractData(res['included']));
-          
           for (var i in _extractData(res['included'])) {
              if (i['type'] == 'warnings') uniqueMap[i['id'].toString()] = i;
           }
@@ -139,72 +137,14 @@ class _UserActivityPageState extends State<UserActivityPage> {
         _items = uniqueMap.values.toList();
         _customEmptyMessage = '暂无站务警告。';
       } 
-      else if (widget.activityType == 'tips') {
-        final results = await Future.wait([
-          _safeFetch('/api/users/$uid/money-rewards', {'include': 'sender,recipient,post'}),
-          _safeFetch('/api/tips', {'filter[user]': uid, 'include': 'sender,recipient,post'}),
-          _safeFetch('/api/tips', {'filter[sender]': uid, 'include': 'sender,recipient,post'}),
-          _safeFetch('/api/tips', {'filter[recipient]': uid, 'include': 'sender,recipient,post'}),
-          _safeFetch('/api/rewards', {'filter[user]': uid, 'include': 'sender,recipient,post'}),
-          _safeFetch('/api/users/$uid', {'include': 'moneyRewards,tips,tips_given,tips_received'}),
-        ]);
-
-        final Map<String, dynamic> uniqueMap = {};
-        for (var res in results) {
-          for(var i in _extractData(res['data'])) {
-            if (i['id'] != null) uniqueMap[i['id'].toString()] = i;
-          }
-          _included.addAll(_extractData(res['included']));
-          for (var i in _extractData(res['included'])) {
-             if (i['type'] == 'tips' || i['type'] == 'rewards' || i['type'] == 'post_tips' || i['type'] == 'moneyRewards') {
-                 uniqueMap[i['id'].toString()] = i;
-             }
-          }
-        }
-
-        // [核心杀招：同一分钟内产生的幽灵去重融合算法]
-        final Map<String, dynamic> finalItemsMap = {};
-        
-        for (var item in uniqueMap.values) {
-           final attrs = item['attributes'] ?? {};
-           final amtStr = attrs['amount']?.toString() ?? attrs['money']?.toString() ?? attrs['value']?.toString() ?? attrs['reward']?.toString() ?? '0';
-           final amt = double.tryParse(amtStr.replaceAll(RegExp(r'[^0-9\.\-]'), '')) ?? 0.0;
-           
-           if (amt == 0.0) continue; // 剔除 0 元注册初始化数据
-
-           final timeStr = attrs['createdAt']?.toString() ?? '';
-           final parsedDate = _parseFlexibleDate(timeStr);
-           if (parsedDate == null) continue; // 剔除时间损坏的底层流水账
-           
-           // 将时间精度卡到分钟，生成指纹：比如 "28934509_1.0"
-           final timeKey = parsedDate.millisecondsSinceEpoch ~/ 60000;
-           final fingerprint = '${timeKey}_$amt';
-
-           if (!finalItemsMap.containsKey(fingerprint)) {
-               finalItemsMap[fingerprint] = item;
-           } else {
-               // 如果指纹发生冲突，优先保留带有“打赏人/被赏人”关系节点的完整数据！踢掉残缺的流水！
-               final existingRels = finalItemsMap[fingerprint]['relationships'] as Map?;
-               final currentRels = item['relationships'] as Map?;
-               if ((existingRels == null || existingRels.isEmpty) && currentRels != null && currentRels.isNotEmpty) {
-                   finalItemsMap[fingerprint] = item;
-               }
-           }
-        }
-
-        _items = finalItemsMap.values.toList();
-        _customEmptyMessage = '暂无打赏记录。';
-      }
-      else if (widget.activityType == 'money') {
-        final endpoints = ['/api/users/$uid/money-transactions', '/api/user-money-histories', '/api/moneyHistory', '/api/users/$uid/moneyHistory', '/api/money-transfers', '/api/transactions'];
+      else if (widget.activityType == 'money-log') {
+        // [核心修改] 依照抓包数据，直连底层真实的积分记录接口
+        final endpoints = ['/api/money-log', '/api/users/$uid/moneyHistory', '/api/moneyHistory'];
         
         List<Future<Map<String, dynamic>>> tasks = [];
         for (var ep in endpoints) {
+           tasks.add(_safeFetch(ep, {'page[offset]': 0})); // 模拟 Web 请求参数
            tasks.add(_safeFetch(ep, {'filter[user]': uid}));
-           tasks.add(_safeFetch(ep, {}));
-        }
-        for (var inc in ['moneyHistory', 'userMoneyHistories', 'transactions', 'moneyTransactions']) {
-           tasks.add(_safeFetch('/api/users/$uid', {'include': inc}));
         }
 
         final results = await Future.wait(tasks);
@@ -215,37 +155,28 @@ class _UserActivityPageState extends State<UserActivityPage> {
              if (i['id'] != null) uniqueMap[i['id'].toString()] = i;
            }
            _included.addAll(_extractData(res['included']));
-           for (var i in _extractData(res['included'])) {
-               if (i['type'] == 'moneyHistory' || i['type'] == 'user-money-histories' || i['type'] == 'transactions' || i['type'] == 'moneyTransactions') {
-                   uniqueMap[i['id'].toString()] = i;
-               }
-           }
         }
 
-        // 资金流水页面执行同样的去重算法
-        final Map<String, dynamic> finalItemsMap = {};
+        final List<dynamic> finalItems = [];
+        final Set<String> seenKeys = {}; 
         
         for (var item in uniqueMap.values) {
            final attrs = item['attributes'] ?? {};
-           final amtStr = attrs['amount']?.toString() ?? attrs['money']?.toString() ?? attrs['balance_delta']?.toString() ?? '0';
-           final amt = double.tryParse(amtStr.replaceAll(RegExp(r'[^0-9\.\-]'), '')) ?? 0.0;
-           
-           if (amt == 0.0) continue;
            
            final timeStr = attrs['createdAt']?.toString() ?? '';
            final parsedDate = _parseFlexibleDate(timeStr);
            if (parsedDate == null) continue;
            
-           final timeKey = parsedDate.millisecondsSinceEpoch ~/ 60000;
-           final fingerprint = '${timeKey}_$amt';
-
-           if (!finalItemsMap.containsKey(fingerprint)) {
-               finalItemsMap[fingerprint] = item;
+           // 去重机制
+           final fingerprint = '${item['id']}_${parsedDate.millisecondsSinceEpoch}';
+           if (!seenKeys.contains(fingerprint)) {
+               seenKeys.add(fingerprint);
+               finalItems.add(item);
            }
         }
         
-        _items = finalItemsMap.values.toList();
-        _customEmptyMessage = '暂无资金明细。';
+        _items = finalItems;
+        _customEmptyMessage = '暂无积分记录。';
       }
 
       if (_items.isNotEmpty) {
@@ -359,15 +290,97 @@ class _UserActivityPageState extends State<UserActivityPage> {
       separatorBuilder: (_, __) => const SizedBox(height: 12),
       itemBuilder: (context, index) {
         final item = _items[index];
-        final type = item['type'];
         
         if (widget.activityType == 'warnings') return _buildWarningItem(item);
-        if (widget.activityType == 'tips' || type == 'rewards' || type == 'post_tips' || type == 'moneyRewards') return _TipItemWidget(item: item, api: widget.api, included: _included, profileUser: widget.user);
-        if (widget.activityType == 'moneyHistory' || type == 'user-money-histories' || type == 'money_transfers' || type == 'transactions' || type == 'moneyTransactions') return _buildMoneyItem(item);
+        if (widget.activityType == 'money-log') return _buildMoneyLogItem(item); // 专属积分记录卡片
         if (widget.activityType == 'posts') return _buildPostItem(item);
         
         return _buildDefaultItem(item);
       },
+    );
+  }
+
+  // [全新 UI] 完美适配网页版积分记录的核心字段（日期、变动金额、余额、原因）
+  Widget _buildMoneyLogItem(Map<String, dynamic> item) {
+    final attrs = item['attributes'] ?? {};
+    
+    // 适配不同插件可能的金额字段命名
+    final amountStr = attrs['money']?.toString() ?? attrs['amount']?.toString() ?? attrs['balance_delta']?.toString() ?? '0';
+    final balanceStr = attrs['balance']?.toString() ?? attrs['currentBalance']?.toString() ?? '-';
+    final reason = attrs['reason']?.toString() ?? attrs['description']?.toString() ?? attrs['source']?.toString() ?? '系统操作';
+    
+    final timeStr = attrs['createdAt']?.toString();
+    String dateDisplay = '未知时间';
+    if (timeStr != null) {
+      final parsedDate = _parseFlexibleDate(timeStr);
+      if (parsedDate != null) {
+        // 格式化为网页版类似的精准时间：YYYY/MM/DD HH:mm:ss
+        dateDisplay = '${parsedDate.year}/${parsedDate.month.toString().padLeft(2, '0')}/${parsedDate.day.toString().padLeft(2, '0')} ${parsedDate.hour.toString().padLeft(2, '0')}:${parsedDate.minute.toString().padLeft(2, '0')}:${parsedDate.second.toString().padLeft(2, '0')}';
+      }
+    }
+    
+    final double amountValue = double.tryParse(amountStr.replaceAll(RegExp(r'[^0-9\.\-]'), '')) ?? 0.0;
+    final bool isIncome = amountValue > 0;
+    final bool isZero = amountValue == 0;
+
+    Color amountColor = isZero ? Colors.black87 : (isIncome ? Colors.green.shade700 : Colors.red.shade600);
+    String amountPrefix = (isIncome && !amountStr.startsWith('+')) ? '+' : '';
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white, 
+        border: Border.all(color: Colors.grey.shade200), 
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 4, offset: const Offset(0, 2))],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(color: isZero ? Colors.grey.shade100 : (isIncome ? Colors.green.shade50 : Colors.red.shade50), shape: BoxShape.circle),
+                child: Icon(
+                  isZero ? Icons.info_outline : (isIncome ? Icons.add_card : Icons.payment), 
+                  size: 20, 
+                  color: amountColor
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(reason, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14, color: Colors.black87, height: 1.4)),
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        Icon(Icons.access_time, size: 12, color: Colors.grey.shade400),
+                        const SizedBox(width: 4),
+                        Text(dateDisplay, style: TextStyle(color: Colors.grey.shade500, fontSize: 12)),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 16),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text('$amountPrefix$amountStr', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: amountColor)),
+                  const SizedBox(height: 4),
+                  if (balanceStr != '-')
+                    Text('余额: $balanceStr', style: TextStyle(color: Colors.grey.shade600, fontSize: 12)),
+                ],
+              )
+            ],
+          ),
+        ],
+      ),
     );
   }
 
@@ -390,7 +403,8 @@ class _UserActivityPageState extends State<UserActivityPage> {
     String timeDisplay = '未知';
     if (timeStr != null) {
       try {
-        timeDisplay = formatRelativeTime(DateTime.parse(timeStr));
+        final parsedDate = _parseFlexibleDate(timeStr);
+        if (parsedDate != null) timeDisplay = formatRelativeTime(parsedDate);
       } catch (_) {}
     }
 
@@ -419,55 +433,16 @@ class _UserActivityPageState extends State<UserActivityPage> {
     );
   }
 
-  Widget _buildMoneyItem(Map<String, dynamic> item) {
-    final attrs = item['attributes'] ?? {};
-    final amount = attrs['amount']?.toString() ?? attrs['money']?.toString() ?? attrs['balance_delta']?.toString() ?? '0';
-    final desc = attrs['description']?.toString() ?? attrs['reason']?.toString() ?? attrs['source']?.toString() ?? '系统变动';
-    
-    final timeStr = attrs['createdAt']?.toString();
-    String timeDisplay = '未知';
-    if (timeStr != null) {
-      try { timeDisplay = formatRelativeTime(DateTime.parse(timeStr)); } catch (_) {}
-    }
-    
-    final isIncome = !amount.startsWith('-');
-
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 16),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(color: Colors.white, border: Border.all(color: Colors.green.shade200), borderRadius: BorderRadius.circular(8)),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Row(
-                children: [
-                  Icon(Icons.account_balance_wallet, size: 18, color: isIncome ? Colors.green : Colors.grey.shade600),
-                  const SizedBox(width: 8),
-                  Text('资金明细', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
-                ],
-              ),
-              Text('${isIncome && amount != "0" && !amount.startsWith("+") ? "+" : ""}$amount XSD', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: isIncome ? Colors.green : Colors.black87)),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Text('事由：$desc', style: const TextStyle(color: Colors.black87, fontSize: 14)),
-          const SizedBox(height: 12),
-          Text('时间：$timeDisplay', style: TextStyle(color: Colors.grey.shade500, fontSize: 12)),
-        ],
-      ),
-    );
-  }
-
   Widget _buildPostItem(Map<String, dynamic> item) {
     final attrs = item['attributes'] ?? {};
     final timeStr = attrs['createdAt']?.toString();
     
     String timeDisplay = '';
     if (timeStr != null) {
-      try { timeDisplay = formatRelativeTime(DateTime.parse(timeStr)); } catch (_) {}
+      try { 
+         final parsedDate = _parseFlexibleDate(timeStr);
+         if (parsedDate != null) timeDisplay = formatRelativeTime(parsedDate);
+      } catch (_) {}
     }
 
     String discussionTitle = '未知帖子';
@@ -562,7 +537,10 @@ class _UserActivityPageState extends State<UserActivityPage> {
     final timeStr = attrs['createdAt']?.toString();
     String timeDisplay = '';
     if (timeStr != null) {
-      try { timeDisplay = formatRelativeTime(DateTime.parse(timeStr)); } catch (_) {}
+      try { 
+         final parsedDate = _parseFlexibleDate(timeStr);
+         if (parsedDate != null) timeDisplay = formatRelativeTime(parsedDate);
+      } catch (_) {}
     }
 
     return Container(
@@ -576,253 +554,6 @@ class _UserActivityPageState extends State<UserActivityPage> {
           const SizedBox(height: 8),
           Text(timeDisplay, style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
         ],
-      ),
-    );
-  }
-}
-
-class _TipItemWidget extends StatefulWidget {
-  final Map<String, dynamic> item;
-  final ApiClient api;
-  final List<dynamic> included;
-  final FlarumUser profileUser;
-
-  const _TipItemWidget({
-    required this.item, 
-    required this.api, 
-    required this.included, 
-    required this.profileUser
-  });
-
-  @override
-  State<_TipItemWidget> createState() => _TipItemWidgetState();
-}
-
-class _TipItemWidgetState extends State<_TipItemWidget> {
-  String _senderName = '加载中...';
-  String _recipientName = '加载中...';
-  String _discussionTitle = '';
-  String? _discussionId;
-  String _amount = '0';
-  String _timeDisplay = '未知';
-  String? _balance;
-
-  // 使用与外层相同的修复解析器，解决时间格式不合规导致的“未知”现象
-  DateTime? _parseFlexibleDate(String? s) {
-    if (s == null || s.trim().isEmpty || s == 'null') return null;
-    final num = int.tryParse(s);
-    if (num != null) {
-      if (s.length == 10) return DateTime.fromMillisecondsSinceEpoch(num * 1000);
-      return DateTime.fromMillisecondsSinceEpoch(num);
-    }
-    return DateTime.tryParse(s);
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    _parseInitialData();
-    _fetchMissingNames();
-  }
-
-  Map<String, dynamic>? _getIncluded(String type, String? id) {
-    if (id == null) return null;
-    try {
-      return widget.included.firstWhere((e) => e['type'] == type && e['id'].toString() == id);
-    } catch (_) { return null; }
-  }
-
-  void _parseInitialData() {
-    final attrs = widget.item['attributes'] ?? {};
-    _amount = attrs['amount']?.toString() ?? attrs['money']?.toString() ?? attrs['value']?.toString() ?? attrs['reward']?.toString() ?? '0';
-    _balance = attrs['balance']?.toString() ?? attrs['currentBalance']?.toString();
-    
-    final timeStr = attrs['createdAt']?.toString();
-    final parsedDate = _parseFlexibleDate(timeStr);
-    if (parsedDate != null) {
-      try { _timeDisplay = formatRelativeTime(parsedDate); } catch (_) {}
-    }
-
-    final postId = widget.item['relationships']?['post']?['data']?['id']?.toString() ?? attrs['postId']?.toString();
-    if (postId != null) {
-      final postNode = _getIncluded('posts', postId);
-      if (postNode != null) {
-         _discussionId = postNode['relationships']?['discussion']?['data']?['id']?.toString();
-      }
-    }
-    _discussionId ??= widget.item['relationships']?['discussion']?['data']?['id']?.toString();
-    
-    if (_discussionId != null) {
-      final dNode = _getIncluded('discussions', _discussionId);
-      if (dNode != null) {
-         _discussionTitle = dNode['attributes']?['title'] ?? '未知帖子';
-      }
-    }
-  }
-
-  Future<String> _resolveUserName(String? id, String defaultName) async {
-    if (id == null) return defaultName;
-    
-    final node = _getIncluded('users', id);
-    if (node != null) {
-        return node['attributes']?['displayName'] ?? node['attributes']?['username'] ?? defaultName;
-    }
-    
-    try {
-        final res = await widget.api.getUser(int.parse(id));
-        return res['data']?['attributes']?['displayName'] ?? res['data']?['attributes']?['username'] ?? defaultName;
-    } catch (_) {
-        return defaultName;
-    }
-  }
-
-  Future<void> _fetchMissingNames() async {
-    final attrs = widget.item['attributes'] ?? {};
-    final rels = widget.item['relationships'] ?? {};
-    
-    final String profileUid = widget.profileUser.id;
-    final String profileName = widget.profileUser.displayName.isNotEmpty ? widget.profileUser.displayName : widget.profileUser.username;
-
-    String? sId = rels['sender']?['data']?['id']?.toString() ?? 
-                  rels['fromUser']?['data']?['id']?.toString() ?? 
-                  attrs['senderId']?.toString() ?? 
-                  attrs['fromUserId']?.toString();
-
-    String? rId = rels['recipient']?['data']?['id']?.toString() ?? 
-                  rels['toUser']?['data']?['id']?.toString() ?? 
-                  attrs['recipientId']?.toString() ?? 
-                  attrs['toUserId']?.toString();
-    
-    String? uId = rels['user']?['data']?['id']?.toString() ?? 
-                  attrs['userId']?.toString();
-
-    List<String> otherUsers = [];
-    rels.forEach((k, v) {
-        if (v is Map && v['data'] is Map) {
-            var d = v['data'];
-            if (d['type'] == 'users' && d['id'] != null && d['id'].toString() != profileUid) {
-                otherUsers.add(d['id'].toString());
-            }
-        } else if (v is Map && v['data'] is List) {
-            for (var e in v['data']) {
-                if (e is Map && e['type'] == 'users' && e['id'] != null && e['id'].toString() != profileUid) {
-                    otherUsers.add(e['id'].toString());
-                }
-            }
-        }
-    });
-
-    if (sId == null && rId == null) {
-        double amt = double.tryParse(_amount.replaceAll(RegExp(r'[^0-9\.\-]'), '')) ?? 0.0;
-        if (amt < 0) {
-            sId = profileUid; 
-            rId = otherUsers.isNotEmpty ? otherUsers.first : null;
-        } else {
-            rId = profileUid; 
-            sId = otherUsers.isNotEmpty ? otherUsers.first : null;
-        }
-    } else if (sId == null && rId != null) {
-        if (rId != profileUid) sId = profileUid;
-        else sId = otherUsers.isNotEmpty ? otherUsers.first : null;
-    } else if (rId == null && sId != null) {
-        if (sId != profileUid) rId = profileUid;
-        else rId = otherUsers.isNotEmpty ? otherUsers.first : null;
-    }
-
-    sId ??= attrs['actorId']?.toString();
-
-    if (rId == null) {
-       final postId = rels['post']?['data']?['id']?.toString() ?? attrs['postId']?.toString();
-       if (postId != null) {
-            final pNode = _getIncluded('posts', postId);
-            if (pNode != null) {
-                rId = pNode['relationships']?['user']?['data']?['id']?.toString();
-            } else {
-                try {
-                    final pRes = await widget.api.getDynamicList('/api/posts/$postId');
-                    rId = pRes['data']?['relationships']?['user']?['data']?['id']?.toString();
-                } catch (_) {}
-            }
-       }
-    }
-
-    String resolvedSender = sId == profileUid ? profileName : await _resolveUserName(sId, sId == null ? '系统' : '未知用户');
-    String resolvedRecipient = rId == profileUid ? profileName : await _resolveUserName(rId, rId == null ? '系统' : '未知用户');
-
-    if (mounted) {
-        setState(() {
-            _senderName = resolvedSender;
-            _recipientName = resolvedRecipient;
-        });
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: _discussionId != null ? () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => DiscussionDetailPage(
-              api: widget.api,
-              discussion: Discussion(
-                id: _discussionId!, 
-                title: _discussionTitle,
-                commentCount: 0, 
-                createdAt: DateTime.now(),
-                tags: const [], 
-              ),
-            ),
-          ),
-        );
-      } : null,
-      child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 16),
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(color: Colors.white, border: Border.all(color: Colors.orange.shade200), borderRadius: BorderRadius.circular(8)),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const Icon(Icons.card_giftcard, size: 18, color: Colors.orange),
-                const SizedBox(width: 8),
-                Text('打赏记录 ($_amount XSD)', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Text.rich(
-              TextSpan(
-                children: [
-                  const TextSpan(text: '打赏用户：', style: TextStyle(color: Colors.grey)),
-                  TextSpan(text: _senderName, style: const TextStyle(fontWeight: FontWeight.w500, color: Colors.black87)),
-                  const TextSpan(text: '  →  ', style: TextStyle(color: Colors.grey)),
-                  TextSpan(text: _recipientName, style: const TextStyle(fontWeight: FontWeight.w500, color: Colors.black87)),
-                ],
-              ),
-              style: const TextStyle(fontSize: 14),
-            ),
-            if (_balance != null) ...[
-              const SizedBox(height: 8),
-              Text('当前余额：$_balance XSD', style: const TextStyle(color: Colors.black87, fontSize: 14)),
-            ],
-            if (_discussionTitle.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Text.rich(
-                TextSpan(
-                  children: [
-                    const TextSpan(text: '相关帖子：', style: TextStyle(color: Colors.grey)),
-                    TextSpan(text: _discussionTitle, style: const TextStyle(color: Colors.blueAccent)),
-                  ],
-                ),
-                style: const TextStyle(fontSize: 14),
-              ),
-            ],
-            const SizedBox(height: 12),
-            Text('时间：$_timeDisplay', style: TextStyle(color: Colors.grey.shade500, fontSize: 12)),
-          ],
-        ),
       ),
     );
   }
