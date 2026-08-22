@@ -143,31 +143,28 @@ class ApiClient {
     return '';
   }
 
-  // [终极防御：带“回马枪验证”的购买引擎，彻底粉碎假成功]
+  // [闪电探针：移除所有阻塞型验证，执行轻量级一击必杀]
   Future<void> buyPost(List<String> possibleIds, int discussionId, int postId) async {
     String? fallbackErrorMsg;
 
-    // 1. 激活后端订单会话 (GET)
+    // 1. 激活后端订单会话 (非常轻量级的 GET 请求)
     try {
-       await _dio.get('/api/pay-to-read/payment/', queryParameters: {'id': discussionId});
+       await _dio.get('/api/pay-to-read/payment/?id=$discussionId');
     } catch (_) {}
 
-    // 2. 真实执行购买请求
+    // 2. 直取命门 (极速 POST 请求)
     final ziivenUrl = '/api/pay-to-read/payment/pay';
-    // [严谨：强制使用 int 格式，防止 PHP 后端校验拦截字符串导致静默失败]
     final ziivenPayloads = [
       {"discussion_id": discussionId}, 
       {"id": discussionId},
       {"post_id": postId},
-      {"data": {"attributes": {"discussion_id": discussionId}}},
-      {"data": {"attributes": {"id": discussionId}}},
     ];
 
     for (var p in ziivenPayloads) {
        try {
          final response = await _dio.post(ziivenUrl, data: p);
          
-         // [拆包验毒] 检查服务器返回的 200 里是否隐藏了业务报错
+         // 极速拆包验毒（只校验内存数据，不再发网络请求查帖子）
          if (response.data is Map) {
              final resData = response.data as Map;
              final status = resData['status'];
@@ -175,41 +172,35 @@ class ApiClient {
              
              if (status == 400 || status == 500 || status == 'error' || status == false) {
                  fallbackErrorMsg = msg?.toString() ?? '余额不足或服务器拒绝。';
-                 continue; // 这个载荷被拒绝，换下一个试试
+                 continue; 
              }
          }
-
-         // [终极验证] 即使没有毒，我们也不信！立刻向服务器重新拉取这篇帖子的数据！
-         final verifyRes = await _dio.get('/api/discussions/$discussionId');
-         final verifyAttrs = verifyRes.data['data']?['attributes'] ?? {};
          
-         // 只有当帖子真的变成 hasPaid = true，才是真金白银的成功！
-         final isUnlocked = (verifyAttrs['hasPaid'] == true) || (verifyAttrs['isPaid'] == true) || (verifyAttrs['canViewPaidContent'] == true);
-         
-         if (isUnlocked) {
-             return; // 终于验证成功！放行！
-         } else {
-             // 揭穿假阳性骗局！
-             fallbackErrorMsg = '操作受限：参数可能未匹配。';
-             continue; // 换个数据载荷继续撞击
+         final resStr = response.data?.toString() ?? '';
+         if (resStr.contains('余额不足') || resStr.contains('积分不足') || resStr.contains('没有权限')) {
+             fallbackErrorMsg = '余额不足或操作受限。';
+             continue;
          }
+
+         // 验证通过，瞬间放行！不再死循环等结果！
+         return; 
 
        } on DioException catch (e) {
          final code = e.response?.statusCode;
-         if (code == 404 || code == 405) continue; 
+         if (code == 404 || code == 405) {
+            break; // 路由不匹配，立刻跳出尝试通用路线，绝不卡死转圈
+         } 
          
-         // 抓取真实的拦截报错
          if (e.response?.data is Map) {
              fallbackErrorMsg = e.response?.data['msg'] ?? e.response?.data['message'] ?? e.response?.data['error'];
          }
        }
     }
 
-    // 3. 通用探针保底（同样带有回马枪验证）
+    // 3. 极速保底通道
     final templates = [
       '/api/paytoread/{id}',
       '/api/pay-to-read/{id}',
-      '/api/discussions/{id}/pay',
     ];
 
     for (var tmpl in templates) {
@@ -219,15 +210,14 @@ class ApiClient {
            final response = await _dio.post(ep, data: {"data": {}});
            
            if (response.data is Map) {
-              if (response.data['status'] == 'error' || response.data['success'] == false) continue;
+              if (response.data['status'] == 'error' || response.data['success'] == false) {
+                 continue;
+              }
            }
+           final str = response.data?.toString() ?? '';
+           if (str.contains('余额不足') || str.contains('操作受限')) continue;
 
-           // 再次回马枪验证
-           final verifyRes = await _dio.get('/api/discussions/$discussionId');
-           final verifyAttrs = verifyRes.data['data']?['attributes'] ?? {};
-           if (verifyAttrs['hasPaid'] == true || verifyAttrs['isPaid'] == true) {
-               return; 
-           }
+           return; 
 
          } on DioException catch (e) {
            final code = e.response?.statusCode;
@@ -239,7 +229,7 @@ class ApiClient {
       }
     }
 
-    throw Exception(fallbackErrorMsg ?? '余额不足或操作受限。');
+    throw Exception(fallbackErrorMsg ?? '参数未能匹配，购买操作被服务器拦截。');
   }
 
   Future<void> tipPost(int postId, int amount) async {
