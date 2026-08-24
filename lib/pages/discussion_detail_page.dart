@@ -410,7 +410,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
   }
   
   // [红框]：原生边框，彻底杜绝白屏
-  Widget _buildLockedPayBlock(String payAmount, String buyersCount, List<String> possibleIds, int discussionId, int postId) {
+  Widget _buildLockedPayBlock(String payAmount, String buyersCount, String ptrId, int discussionId) {
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 8),
       padding: const EdgeInsets.all(16),
@@ -450,6 +450,13 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                           _promptLogin();
                           return;
                         }
+                        
+                        // 防御机制：如果因为某些异常提取不到插件生成的专属 ID，则拒绝执行并提示错误
+                        if (ptrId.isEmpty) {
+                           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('无法获取区块ID，请在网页端重试。')));
+                           return;
+                        }
+
                         if (!mounted) return;
                         showDialog(
                           context: context,
@@ -472,7 +479,8 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                                       onPressed: isSubmitting ? null : () async {
                                         setStateDialog(() => isSubmitting = true);
                                         try {
-                                          await widget.api.buyPost(possibleIds, discussionId, postId);
+                                          // 🚨 极速击杀：只传提取出的这一个唯一且正确的专属 ID！
+                                          await widget.api.buyPost(ptrId, discussionId);
                                           if (mounted) {
                                             Navigator.pop(ctx); 
                                             ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('购买成功！请稍候...')));
@@ -535,7 +543,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
             ],
           ),
           const SizedBox(height: 16),
-          // 直接渲染完整的净化 HTML，不再提取子内容，防止提取失败导致空包
           HtmlWidget(
              safeHtmlContent, 
              textStyle: const TextStyle(fontSize: 16, height: 1.6, color: Colors.black87),
@@ -619,7 +626,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
       separatorBuilder: (context, index) => const Divider(height: 1, thickness: 0.5, color: Color(0xFFE5E5EA)),
       itemBuilder: (context, index) {
         final post = _posts[index];
-        final postId = int.parse(post['id']);
         final discussionId = int.parse(widget.discussion.id); 
         final attrs = post['attributes'] ?? {};
         
@@ -639,27 +645,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
         final bool canEdit = attrs['canEdit'] == true;
         final bool canDelete = attrs['canDelete'] == true;
 
-        Set<String> possibleIds = {postId.toString(), discussionId.toString()};
-        for (var rels in [post['relationships'] ?? {}, _discussionData['relationships'] ?? {}]) {
-           rels.forEach((key, value) {
-              if (key.toLowerCase().contains('pay')) {
-                 if (value is Map && value['data'] is Map && value['data']['id'] != null) possibleIds.add(value['data']['id'].toString());
-              }
-           });
-        }
-        for (var inc in _included) {
-           final t = inc['type']?.toString().toLowerCase() ?? '';
-           if (t.contains('pay')) possibleIds.add(inc['id'].toString());
-        }
-        for (var at in [attrs, _discussionData['attributes'] ?? {}]) {
-           at.forEach((key, value) {
-              if (key.toLowerCase().contains('id') || key.toLowerCase().contains('pay')) {
-                 if (value is int) possibleIds.add(value.toString());
-                 if (value is String && int.tryParse(value) != null) possibleIds.add(value);
-              }
-           });
-        }
-
         String payAmount = '1';
         if (attrs['payAmount'] != null) payAmount = attrs['payAmount'].toString();
         else if (attrs['price'] != null) payAmount = attrs['price'].toString();
@@ -673,22 +658,30 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
         else if (attrs['buyersCount'] != null) buyersCount = attrs['buyersCount'].toString();
         
         
-        // 🚨 终极解码：抛弃文本检索，100% 依赖插件真实的 HTML 注入状态！
+        // 🚨 终极武器：从 HTML 和文本中提取那个隐藏极深的专属 block ID
+        String ptrId = '';
+        final idMatch = RegExp(r'id=([0-9]+)').firstMatch(rawContent);
+        if (idMatch != null && idMatch.group(1) != null) {
+            ptrId = idMatch.group(1)!;
+        }
+        if (ptrId.isEmpty) {
+            final dataIdMatch = RegExp(r'data-id="([0-9]+)"').firstMatch(htmlContent);
+            if (dataIdMatch != null && dataIdMatch.group(1) != null) {
+                ptrId = dataIdMatch.group(1)!;
+            }
+        }
+        
         bool isPayProtected = false;
         bool hasSuccessfullyUnlocked = false; 
         
         if (htmlContent.contains('ptr-block') || htmlContent.contains('pay-to-read') || rawContent.contains('[pay')) {
-            // 只要发现插件的框，先默认它上了锁
             isPayProtected = true; 
-            
-            // 如果插件在这个框里注入了 `ptr-paid` (付款完毕)，立刻解锁并升起蓝框！
             if (htmlContent.contains('ptr-paid') || htmlContent.contains('ptr-unlocked')) {
                 isPayProtected = false; 
                 hasSuccessfullyUnlocked = true;
             }
         }
 
-        // 作者免死金牌
         if (_currentUser != null && _currentUser!.id == userIdStr) {
              if (isPayProtected) {
                  isPayProtected = false;
@@ -733,9 +726,8 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
               ),
               const SizedBox(height: 12),
               
-              // 🚨 UI 智能分发
               if (isPayProtected) 
-                 _buildLockedPayBlock(payAmount, buyersCount, possibleIds.toList(), discussionId, postId) 
+                 _buildLockedPayBlock(payAmount, buyersCount, ptrId, discussionId) 
               else if (hasSuccessfullyUnlocked)
                  _buildUnlockedPayBlock(safeHtml, buyersCount)
               else 
@@ -780,10 +772,11 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                         _promptLogin();
                         return;
                       }
+                      final postIdInt = int.parse(_posts[index]['id']);
                       if (value == 'edit') _openEditorForEdit(index);
-                      else if (value == 'delete') _deletePost(postId, index);
-                      else if (value == 'tip') _showTipDialog(postId);
-                      else if (value == 'warn') _showWarnDialog(postId, userIdStr);
+                      else if (value == 'delete') _deletePost(postIdInt, index);
+                      else if (value == 'tip') _showTipDialog(postIdInt);
+                      else if (value == 'warn') _showWarnDialog(postIdInt, userIdStr);
                       else if (value == 'vote') _showVoteDetails(index);
                     },
                     itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
