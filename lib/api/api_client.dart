@@ -121,18 +121,17 @@ class ApiClient {
       relationships['tags'] = {"data": tagIds.map((tid) => {"type": "tags", "id": tid.toString()}).toList()};
     }
 
-    final data = {
-      "data": {
-        "type": "discussions",
-        "id": id.toString(),
-        "attributes": attributes,
-      }
+    final Map<String, dynamic> dataBlock = {
+      "type": "discussions",
+      "id": id.toString(),
+      "attributes": attributes,
     };
+
     if (relationships.isNotEmpty) {
-      data["data"]["relationships"] = relationships;
+      dataBlock["relationships"] = relationships;
     }
 
-    await _dio.patch('/api/discussions/$id', data: data);
+    await _dio.patch('/api/discussions/$id', data: {"data": dataBlock});
   }
 
   Future<void> deleteDiscussion(int id) async {
@@ -156,8 +155,7 @@ class ApiClient {
   }
 
   Future<void> warnUser(int targetUserId, {int? postId, int strikes = 0, String? publicComment, String? privateComment}) async {
-    final Map<String, dynamic> data = {
-      "data": {
+    final Map<String, dynamic> dataBlock = {
         "type": "warnings", 
         "attributes": {
           "userId": targetUserId.toString(),
@@ -165,13 +163,12 @@ class ApiClient {
           "public_comment": publicComment ?? "",
           "private_comment": privateComment ?? ""
         }, 
-        "relationships": {}
-      }
+        "relationships": <String, dynamic>{}
     };
     if (postId != null) {
-       data["data"]["relationships"]["post"] = {"data": {"type": "posts", "id": postId.toString()}};
+       (dataBlock["relationships"] as Map<String, dynamic>)["post"] = {"data": {"type": "posts", "id": postId.toString()}};
     }
-    await _dio.post('/api/warnings', data: data);
+    await _dio.post('/api/warnings', data: {"data": dataBlock});
   }
 
   Future<void> reportPost(int postId, int currentUserId, String reason, String? detail) async {
