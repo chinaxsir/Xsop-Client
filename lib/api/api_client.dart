@@ -110,7 +110,6 @@ class ApiClient {
     return _asMap(response.data);
   }
 
-  // 🚨 升级接口：增加 title 参数用于重命名主题
   Future<void> updateDiscussion(int id, {String? title, bool? isSticky, bool? isLocked, List<String>? tagIds}) async {
     final Map<String, dynamic> attributes = {};
     if (title != null && title.isNotEmpty) attributes['title'] = title;
@@ -220,48 +219,6 @@ class ApiClient {
       }
       throw Exception('请求中止：服务端已拒绝此项操作。');
     }
-  }
-
-  Future<void> tipPost(int postId, int amount) async {
-    DioException? bestErr;
-    final endpoints = [
-      '/api/posts/$postId/tip', 
-      '/api/posts/$postId/reward', 
-      '/api/tips',
-      '/api/rewards',
-    ];
-    
-    final payloads = [
-      {"data": {"type": "tips", "attributes": {"amount": amount}, "relationships": {"post": {"data": {"type": "posts", "id": postId.toString()}}}}},
-      {"data": {"attributes": {"amount": amount}}},
-      {"amount": amount},
-    ];
-
-    for (final ep in endpoints) {
-      bool routeExists = false;
-      for (final p in payloads) {
-        try {
-          await _dio.post(ep, data: p);
-          return;
-        } on DioException catch (e) {
-          final code = e.response?.statusCode;
-          final errCode = _extractErrorCode(e.response?.data);
-          
-          if (code == 404 && errCode == 'route_not_found') {
-             routeExists = false; break; 
-          }
-          if (code == 405) {
-             routeExists = false; break;
-          }
-          routeExists = true; bestErr = e;
-
-          if (code == 422 || errCode == 'validation_error') continue;
-          if (errCode != 'not_found' && code != 404) throw e;
-        }
-      }
-      if (routeExists && bestErr != null) throw bestErr;
-    }
-    throw Exception('接口异常：未能匹配适用的赞赏服务。');
   }
 
   Future<void> likePost(int postId, bool isLiked) async {
