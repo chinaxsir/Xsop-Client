@@ -614,6 +614,9 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
         final bool canEdit = attrs['canEdit'] == true;
         final bool canDelete = attrs['canDelete'] == true;
         
+        // 声明纯文本变量以用于拦截判断
+        String plainText = htmlContent.replaceAll(RegExp(r'<[^>]*>'), '').replaceAll('&nbsp;', '').trim();
+
         Set<String> possibleIds = {postId.toString(), discussionId.toString()};
         
         for (var rels in [post['relationships'] ?? {}, _discussionData['relationships'] ?? {}]) {
@@ -642,7 +645,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
            });
         }
         
-        // [核心修正：绝不强行二次上锁] 确保当服务器明确告知“已支付”时，赋予最高解锁豁免权！
         final discussionAttrs = _discussionData['attributes'] ?? {};
         bool hasPaid = false;
         if (attrs['hasPaid'] == true || attrs['isPaid'] == true || attrs['canViewPaidContent'] == true) {
@@ -654,7 +656,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
 
         bool isPayProtected = false;
         
-        // 只有当没有买的时候，才去检测那些该死的敏感词
         if (!hasPaid) {
             if (attrs['isPay'] == true || attrs['payAmount'] != null || attrs['price'] != null) {
                 isPayProtected = true;
@@ -667,7 +668,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
             }
         }
 
-        // 作者永远可见
         if (_currentUser != null && _currentUser!.id == userIdStr) {
              isPayProtected = false;
         }
