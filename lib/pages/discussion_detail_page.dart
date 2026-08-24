@@ -409,122 +409,113 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
     return safeHtml;
   }
   
-  // [极速 UI：未购买状态的红框]
+  // [未购买界面]：安全、不崩溃的原生边框
   Widget _buildLockedPayBlock(String payAmount, String buyersCount, List<String> possibleIds, int discussionId, int postId) {
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 8),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: const Color(0xFFFCF8F8),
-        borderRadius: BorderRadius.circular(2),
+        color: const Color(0xFFFFF5F5), // 浅红色背景
+        border: Border.all(color: const Color(0xFFFFA8A8), width: 1.5), // 红色实线边框，极其稳定！
+        borderRadius: BorderRadius.circular(8),
       ),
-      child: Stack(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Positioned.fill(
-             child: CustomPaint(painter: _DashedBorderPainter(color: const Color(0xFFE88A8E))), 
+          const Center(
+            child: Text('本帖包含付费阅读内容', style: TextStyle(color: Color(0xFFE85055), fontWeight: FontWeight.bold, fontSize: 14)),
           ),
-          Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const Center(
-                  child: Text('本帖的付费阅读内容', style: TextStyle(color: Color(0xFFE85055), fontWeight: FontWeight.bold, fontSize: 14)),
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Expanded(
-                      child: Text('作者将该内容设置为付费可见。 价格 $payAmount XSD', style: const TextStyle(fontSize: 14, color: Colors.black87)),
-                    ),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                         Text('$buyersCount人付费', style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
-                         const SizedBox(height: 8),
-                         FilledButton(
-                           style: FilledButton.styleFrom(
-                             backgroundColor: const Color(0xFF526D85), 
-                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
-                             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 0),
-                             minimumSize: const Size(80, 36),
-                           ),
-                           onPressed: () async {
-                              final isLoggedIn = await widget.api.isLoggedIn;
-                              if (!isLoggedIn) {
-                                _promptLogin();
-                                return;
+          const SizedBox(height: 16),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Expanded(
+                child: Text('作者将该内容设置为付费可见。 价格 $payAmount XSD', style: const TextStyle(fontSize: 14, color: Colors.black87)),
+              ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                   Text('$buyersCount人付费', style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
+                   const SizedBox(height: 8),
+                   FilledButton(
+                     style: FilledButton.styleFrom(
+                       backgroundColor: const Color(0xFF526D85), 
+                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 0),
+                       minimumSize: const Size(80, 36),
+                     ),
+                     onPressed: () async {
+                        final isLoggedIn = await widget.api.isLoggedIn;
+                        if (!isLoggedIn) {
+                          _promptLogin();
+                          return;
+                        }
+                        if (!mounted) return;
+                        showDialog(
+                          context: context,
+                          builder: (ctx) {
+                            bool isSubmitting = false;
+                            return StatefulBuilder(
+                              builder: (ctx, setStateDialog) {
+                                return AlertDialog(
+                                  backgroundColor: Colors.white,
+                                  surfaceTintColor: Colors.transparent,
+                                  title: const Text('确认购买', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+                                  content: Text('是否确认花费 $payAmount XSD 购买此内容？'),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () => Navigator.pop(ctx),
+                                      child: const Text('取消', style: TextStyle(color: Colors.grey)),
+                                    ),
+                                    FilledButton(
+                                      style: FilledButton.styleFrom(backgroundColor: const Color(0xFF526D85)),
+                                      onPressed: isSubmitting ? null : () async {
+                                        setStateDialog(() => isSubmitting = true);
+                                        try {
+                                          await widget.api.buyPost(possibleIds, discussionId, postId);
+                                          if (mounted) {
+                                            Navigator.pop(ctx); 
+                                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('购买成功！请稍候...')));
+                                            setState(() => _isLoading = true);
+                                            await _loadCurrentUser();
+                                            await _loadDiscussionDetail(); 
+                                          }
+                                        } catch (e) {
+                                          if (mounted) {
+                                            final eStr = e.toString();
+                                            Navigator.pop(ctx); 
+                                            String pureMsg = eStr.replaceAll('Exception: ', '');
+                                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(pureMsg), duration: const Duration(seconds: 4)));
+                                          }
+                                        } finally {
+                                          if (mounted) setStateDialog(() => isSubmitting = false);
+                                        }
+                                      },
+                                      child: isSubmitting 
+                                        ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) 
+                                        : const Text('购买'),
+                                    ),
+                                  ],
+                                );
                               }
-                              if (!mounted) return;
-                              showDialog(
-                                context: context,
-                                builder: (ctx) {
-                                  bool isSubmitting = false;
-                                  return StatefulBuilder(
-                                    builder: (ctx, setStateDialog) {
-                                      return AlertDialog(
-                                        backgroundColor: Colors.white,
-                                        surfaceTintColor: Colors.transparent,
-                                        title: const Text('确认购买', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-                                        content: Text('是否确认花费 $payAmount XSD 购买此内容？'),
-                                        actions: [
-                                          TextButton(
-                                            onPressed: () => Navigator.pop(ctx),
-                                            child: const Text('取消', style: TextStyle(color: Colors.grey)),
-                                          ),
-                                          FilledButton(
-                                            style: FilledButton.styleFrom(backgroundColor: const Color(0xFF526D85)),
-                                            onPressed: isSubmitting ? null : () async {
-                                              setStateDialog(() => isSubmitting = true);
-                                              try {
-                                                await widget.api.buyPost(possibleIds, discussionId, postId);
-                                                if (mounted) {
-                                                  Navigator.pop(ctx); 
-                                                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('购买成功！请稍候...')));
-                                                  setState(() => _isLoading = true);
-                                                  await _loadCurrentUser();
-                                                  await _loadDiscussionDetail(); 
-                                                }
-                                              } catch (e) {
-                                                if (mounted) {
-                                                  final eStr = e.toString();
-                                                  Navigator.pop(ctx); 
-                                                  String pureMsg = eStr.replaceAll('Exception: ', '');
-                                                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(pureMsg), duration: const Duration(seconds: 4)));
-                                                }
-                                              } finally {
-                                                if (mounted) setStateDialog(() => isSubmitting = false);
-                                              }
-                                            },
-                                            child: isSubmitting 
-                                              ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) 
-                                              : const Text('购买'),
-                                          ),
-                                        ],
-                                      );
-                                    }
-                                  );
-                                }
-                              );
-                           },
-                           child: const Text('购买', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                         )
-                      ],
-                    )
-                  ],
-                )
-              ],
-            ),
+                            );
+                          }
+                        );
+                     },
+                     child: const Text('购买', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                   )
+                ],
+              )
+            ],
           )
         ],
       ),
     );
   }
 
-  // [完美复刻：已购买状态的蓝框，彻底解决白屏 BUG！]
+  // [已购买界面]：安全、不崩溃的原生边框
   Widget _buildUnlockedPayBlock(String safeHtmlContent, String buyersCount) {
-    // 使用正则把核心内容从臃肿的插件 div 壳子里扒出来
+    // 强制扒掉插件臃肿的 ptr-block 壳子，只提取里面的干净标签
     String coreText = safeHtmlContent;
     final match = RegExp(r'<div class="ptr-block[^>]+>(.*?)</div>', multiLine: true, dotAll: true).firstMatch(safeHtmlContent);
     if (match != null && match.group(1) != null) {
@@ -535,36 +526,27 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
       margin: const EdgeInsets.symmetric(vertical: 8),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(2),
+        color: const Color(0xFFF4FAFF), // 浅蓝色背景
+        border: Border.all(color: const Color(0xFF64B5F6), width: 1.5), // 蓝色实线边框，极其稳定！
+        borderRadius: BorderRadius.circular(8),
       ),
-      child: Stack(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Positioned.fill(
-             // 完美复刻网页端的纯正蓝色虚线框
-             child: CustomPaint(painter: _DashedBorderPainter(color: const Color(0xFF1976D2))), 
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const SizedBox(width: 40), 
+              const Text('✅ 已解锁的付费内容', style: TextStyle(color: Color(0xFF1976D2), fontWeight: FontWeight.bold, fontSize: 14)),
+              Text('$buyersCount人付费', style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
+            ],
           ),
-          Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const SizedBox(width: 40), 
-                    const Text('本帖的付费阅读内容', style: TextStyle(color: Color(0xFF1976D2), fontWeight: FontWeight.bold, fontSize: 14)),
-                    Text('$buyersCount人付费', style: TextStyle(fontSize: 12, color: Colors.grey.shade400)),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                HtmlWidget(
-                   coreText, 
-                   textStyle: const TextStyle(fontSize: 16, height: 1.6, color: Colors.black87),
-                ),
-              ],
-            ),
-          )
+          const SizedBox(height: 16),
+          // 使用原生的 HtmlWidget 渲染干净的代码，绝不白屏
+          HtmlWidget(
+             coreText, 
+             textStyle: const TextStyle(fontSize: 16, height: 1.6, color: Colors.black87),
+          ),
         ],
       ),
     );
@@ -699,21 +681,18 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
         if (attrs['paidUsersCount'] != null) buyersCount = attrs['paidUsersCount'].toString();
         else if (attrs['buyersCount'] != null) buyersCount = attrs['buyersCount'].toString();
         
-        // 🚨 核心判定
+        // 🚨 核心逻辑，不再导致白屏崩溃
         bool isPayProtected = false;
-        bool hasSuccessfullyUnlocked = false; // 是否已经购买/解锁
+        bool hasSuccessfullyUnlocked = false; 
         
         if (rawContent.contains('[pay') || rawContent.contains('[charge')) {
             isPayProtected = true; 
-            
-            // 只要检测到 ptr-paid（Ziiven专用解锁标签），立刻解除武装锁定，并升起蓝色虚线框！
             if (htmlContent.contains('ptr-paid') || htmlContent.contains('ptr-unlocked')) {
                 isPayProtected = false; 
                 hasSuccessfullyUnlocked = true;
             }
         }
 
-        // 作者免死金牌
         if (_currentUser != null && _currentUser!.id == userIdStr) {
              isPayProtected = false;
              if (rawContent.contains('[pay')) hasSuccessfullyUnlocked = true;
@@ -756,7 +735,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
               ),
               const SizedBox(height: 12),
               
-              // 🚨 UI 智能分流
               if (isPayProtected) 
                  _buildLockedPayBlock(payAmount, buyersCount, possibleIds.toList(), discussionId, postId) 
               else if (hasSuccessfullyUnlocked)
@@ -827,50 +805,4 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
       },
     );
   }
-}
-
-class _DashedBorderPainter extends CustomPainter {
-  final Color color;
-  _DashedBorderPainter({required this.color});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    var paint = Paint()
-      ..color = color
-      ..strokeWidth = 1.5
-      ..style = PaintingStyle.stroke;
-
-    var path = Path();
-    double dashWidth = 5.0, dashSpace = 4.0;
-    
-    double startX = 0;
-    while (startX < size.width) {
-      path.moveTo(startX, 0);
-      path.lineTo(startX + dashWidth, 0);
-      startX += dashWidth + dashSpace;
-    }
-    startX = 0;
-    while (startX < size.width) {
-      path.moveTo(startX, size.height);
-      path.lineTo(startX + dashWidth, size.height);
-      startX += dashWidth + dashSpace;
-    }
-    double startY = 0;
-    while (startY < size.height) {
-      path.moveTo(0, startY);
-      path.lineTo(0, startY + dashWidth);
-      startY += dashWidth + dashSpace;
-    }
-    startY = 0;
-    while (startY < size.height) {
-      path.moveTo(size.width, startY);
-      path.lineTo(size.width, startY + dashWidth);
-      startY += dashWidth + dashSpace;
-    }
-
-    canvas.drawPath(path, paint);
-  }
-
-  @override
-  bool shouldRepaint(CustomPainter oldDelegate) => false;
 }
