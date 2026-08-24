@@ -479,7 +479,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                                       onPressed: isSubmitting ? null : () async {
                                         setStateDialog(() => isSubmitting = true);
                                         try {
-                                          // 🚨 极速击杀：只传提取出的这一个唯一且正确的专属 ID！
                                           await widget.api.buyPost(ptrId, discussionId);
                                           if (mounted) {
                                             Navigator.pop(ctx); 
@@ -543,6 +542,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
             ],
           ),
           const SizedBox(height: 16),
+          // 直接渲染完整的净化 HTML，不再提取子内容，防止提取失败导致空包
           HtmlWidget(
              safeHtmlContent, 
              textStyle: const TextStyle(fontSize: 16, height: 1.6, color: Colors.black87),
@@ -626,6 +626,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
       separatorBuilder: (context, index) => const Divider(height: 1, thickness: 0.5, color: Color(0xFFE5E5EA)),
       itemBuilder: (context, index) {
         final post = _posts[index];
+        final postId = int.parse(post['id']);
         final discussionId = int.parse(widget.discussion.id); 
         final attrs = post['attributes'] ?? {};
         
@@ -653,12 +654,17 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
            if (match != null) payAmount = match.group(1) ?? '1';
         }
 
+        // 🚨 [智能爬虫] 强力提取 Ziiven 潜藏在 HTML 里的“购买人数”
         String buyersCount = '0';
-        if (attrs['paidUsersCount'] != null) buyersCount = attrs['paidUsersCount'].toString();
-        else if (attrs['buyersCount'] != null) buyersCount = attrs['buyersCount'].toString();
+        final cntMatch = RegExp(r'data-haspaid-cnt="([0-9]+)"').firstMatch(htmlContent);
+        if (cntMatch != null && cntMatch.group(1) != null) {
+            buyersCount = cntMatch.group(1)!;
+        } else if (attrs['paidUsersCount'] != null) {
+            buyersCount = attrs['paidUsersCount'].toString();
+        } else if (attrs['buyersCount'] != null) {
+            buyersCount = attrs['buyersCount'].toString();
+        }
         
-        
-        // 🚨 终极武器：从 HTML 和文本中提取那个隐藏极深的专属 block ID
         String ptrId = '';
         final idMatch = RegExp(r'id=([0-9]+)').firstMatch(rawContent);
         if (idMatch != null && idMatch.group(1) != null) {
