@@ -409,14 +409,14 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
     return safeHtml;
   }
   
-  // [未购买界面]：安全、不崩溃的原生边框
+  // [红框]：原生边框，彻底杜绝白屏
   Widget _buildLockedPayBlock(String payAmount, String buyersCount, List<String> possibleIds, int discussionId, int postId) {
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 8),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: const Color(0xFFFFF5F5), // 浅红色背景
-        border: Border.all(color: const Color(0xFFFFA8A8), width: 1.5), // 红色实线边框，极其稳定！
+        color: const Color(0xFFFFF5F5), 
+        border: Border.all(color: const Color(0xFFFFA8A8), width: 1.5), 
         borderRadius: BorderRadius.circular(8),
       ),
       child: Column(
@@ -513,21 +513,14 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
     );
   }
 
-  // [已购买界面]：安全、不崩溃的原生边框
+  // [蓝框]：原生边框，显示解锁内容，彻底杜绝白屏
   Widget _buildUnlockedPayBlock(String safeHtmlContent, String buyersCount) {
-    // 强制扒掉插件臃肿的 ptr-block 壳子，只提取里面的干净标签
-    String coreText = safeHtmlContent;
-    final match = RegExp(r'<div class="ptr-block[^>]+>(.*?)</div>', multiLine: true, dotAll: true).firstMatch(safeHtmlContent);
-    if (match != null && match.group(1) != null) {
-       coreText = match.group(1)!;
-    }
-
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 8),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: const Color(0xFFF4FAFF), // 浅蓝色背景
-        border: Border.all(color: const Color(0xFF64B5F6), width: 1.5), // 蓝色实线边框，极其稳定！
+        color: const Color(0xFFF4FAFF), 
+        border: Border.all(color: const Color(0xFF64B5F6), width: 1.5), 
         borderRadius: BorderRadius.circular(8),
       ),
       child: Column(
@@ -538,13 +531,13 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
             children: [
               const SizedBox(width: 40), 
               const Text('✅ 已解锁的付费内容', style: TextStyle(color: Color(0xFF1976D2), fontWeight: FontWeight.bold, fontSize: 14)),
-              Text('$buyersCount人付费', style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
+              Text('$buyersCount人付费', style: TextStyle(fontSize: 12, color: Colors.grey.shade400)),
             ],
           ),
           const SizedBox(height: 16),
-          // 使用原生的 HtmlWidget 渲染干净的代码，绝不白屏
+          // 直接渲染完整的净化 HTML，不再提取子内容，防止提取失败导致空包
           HtmlWidget(
-             coreText, 
+             safeHtmlContent, 
              textStyle: const TextStyle(fontSize: 16, height: 1.6, color: Colors.black87),
           ),
         ],
@@ -645,8 +638,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
 
         final bool canEdit = attrs['canEdit'] == true;
         final bool canDelete = attrs['canDelete'] == true;
-        
-        String plainText = htmlContent.replaceAll(RegExp(r'<[^>]*>'), '').replaceAll('&nbsp;', '').trim();
 
         Set<String> possibleIds = {postId.toString(), discussionId.toString()};
         for (var rels in [post['relationships'] ?? {}, _discussionData['relationships'] ?? {}]) {
@@ -681,21 +672,28 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
         if (attrs['paidUsersCount'] != null) buyersCount = attrs['paidUsersCount'].toString();
         else if (attrs['buyersCount'] != null) buyersCount = attrs['buyersCount'].toString();
         
-        // 🚨 核心逻辑，不再导致白屏崩溃
+        
+        // 🚨 终极解码：抛弃文本检索，100% 依赖插件真实的 HTML 注入状态！
         bool isPayProtected = false;
         bool hasSuccessfullyUnlocked = false; 
         
-        if (rawContent.contains('[pay') || rawContent.contains('[charge')) {
+        if (htmlContent.contains('ptr-block') || htmlContent.contains('pay-to-read') || rawContent.contains('[pay')) {
+            // 只要发现插件的框，先默认它上了锁
             isPayProtected = true; 
+            
+            // 如果插件在这个框里注入了 `ptr-paid` (付款完毕)，立刻解锁并升起蓝框！
             if (htmlContent.contains('ptr-paid') || htmlContent.contains('ptr-unlocked')) {
                 isPayProtected = false; 
                 hasSuccessfullyUnlocked = true;
             }
         }
 
+        // 作者免死金牌
         if (_currentUser != null && _currentUser!.id == userIdStr) {
-             isPayProtected = false;
-             if (rawContent.contains('[pay')) hasSuccessfullyUnlocked = true;
+             if (isPayProtected) {
+                 isPayProtected = false;
+                 hasSuccessfullyUnlocked = true;
+             }
         }
 
         final safeHtml = _sanitizeHtmlForVideo(htmlContent);
@@ -735,6 +733,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
               ),
               const SizedBox(height: 12),
               
+              // 🚨 UI 智能分发
               if (isPayProtected) 
                  _buildLockedPayBlock(payAmount, buyersCount, possibleIds.toList(), discussionId, postId) 
               else if (hasSuccessfullyUnlocked)
