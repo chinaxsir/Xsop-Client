@@ -110,6 +110,36 @@ class ApiClient {
     return _asMap(response.data);
   }
 
+  // 🚨 升级接口：增加 title 参数用于重命名主题
+  Future<void> updateDiscussion(int id, {String? title, bool? isSticky, bool? isLocked, List<String>? tagIds}) async {
+    final Map<String, dynamic> attributes = {};
+    if (title != null && title.isNotEmpty) attributes['title'] = title;
+    if (isSticky != null) attributes['isSticky'] = isSticky;
+    if (isLocked != null) attributes['isLocked'] = isLocked;
+
+    final Map<String, dynamic> relationships = {};
+    if (tagIds != null) {
+      relationships['tags'] = {"data": tagIds.map((tid) => {"type": "tags", "id": tid.toString()}).toList()};
+    }
+
+    final data = {
+      "data": {
+        "type": "discussions",
+        "id": id.toString(),
+        "attributes": attributes,
+      }
+    };
+    if (relationships.isNotEmpty) {
+      data["data"]["relationships"] = relationships;
+    }
+
+    await _dio.patch('/api/discussions/$id', data: data);
+  }
+
+  Future<void> deleteDiscussion(int id) async {
+    await _dio.delete('/api/discussions/$id');
+  }
+
   Future<Map<String, dynamic>> createPost(int discussionId, String content) async {
     final data = {"data": {"type": "posts", "attributes": {"content": content}, "relationships": {"discussion": {"data": {"type": "discussions", "id": discussionId.toString()}}}}};
     final response = await _dio.post('/api/posts', data: data);
@@ -126,12 +156,36 @@ class ApiClient {
     });
   }
 
-  Future<void> warnUser(int userId, {int? postId, int strikes = 0, String? publicComment, String? privateComment}) async {
+  Future<void> warnUser(int targetUserId, {int? postId, int strikes = 0, String? publicComment, String? privateComment}) async {
     final Map<String, dynamic> data = {
-      "data": {"type": "warnings", "attributes": {"strikes": strikes, "publicComment": publicComment ?? "", "privateComment": privateComment ?? ""}, "relationships": {"user": {"data": {"type": "users", "id": userId.toString()}}}}
+      "data": {
+        "type": "warnings", 
+        "attributes": {
+          "userId": targetUserId.toString(),
+          "strikes": strikes.toString(),
+          "public_comment": publicComment ?? "",
+          "private_comment": privateComment ?? ""
+        }, 
+        "relationships": {}
+      }
     };
-    if (postId != null) data["data"]["relationships"]["post"] = {"data": {"type": "posts", "id": postId.toString()}};
+    if (postId != null) {
+       data["data"]["relationships"]["post"] = {"data": {"type": "posts", "id": postId.toString()}};
+    }
     await _dio.post('/api/warnings', data: data);
+  }
+
+  Future<void> reportPost(int postId, int currentUserId, String reason, String? detail) async {
+    await _dio.post('/api/flags', data: {
+      "data": {
+        "type": "flags", 
+        "attributes": {"reason": reason, "reasonDetail": detail ?? ""}, 
+        "relationships": {
+           "user": {"data": {"type": "users", "id": currentUserId.toString()}},
+           "post": {"data": {"type": "posts", "id": postId.toString()}}
+        }
+      }
+    });
   }
 
   String _extractErrorCode(dynamic data) {
@@ -143,9 +197,7 @@ class ApiClient {
     return '';
   }
 
-  // 🚨 终极极速版购买引擎：砍掉所有冗余，只拿唯一的 ptrId 进行一击必杀！
   Future<void> buyPost(String ptrId, int discussionId) async {
-    // 激活订单会话
     try {
        await _dio.get('/api/pay-to-read/payment/', queryParameters: {'id': discussionId});
     } catch (_) {}
@@ -153,27 +205,20 @@ class ApiClient {
     final ziivenUrl = '/api/pay-to-read/payment/pay';
 
     try {
-      // 最干净、最纯粹的一击！只传插件专属的数据库区块 ID！
       final response = await _dio.post(ziivenUrl, data: {"id": ptrId});
-      
-      if (response.statusCode == 201) return; // 真实扣款成功
-
-      // 如果还是返回了 200，说明没抛错也没扣款（可能这篇帖子不用买，或者 ID 过期了）
-      throw Exception('操作未能生效，请检查内容状态。');
-
+      if (response.statusCode == 201) return; 
+      throw Exception('操作异常：状态码校验失败，请查验系统日志。');
     } on DioException catch (e) {
       final code = e.response?.statusCode;
       final errStr = e.response?.data?.toString() ?? '';
       
       if (errStr.contains('不足') || errStr.contains('没钱') || errStr.contains('insufficient') || code == 403) {
-         throw Exception('余额不足或操作受限。'); 
+         throw Exception('系统拒绝：账户资产不足或无相关操作权限。'); 
       }
-      
       if (code == 404 || code == 405) {
-         throw Exception('未找到购买接口，请确认插件已启用。');
+         throw Exception('系统错误：未能定位相关处理接口。');
       }
-      
-      throw Exception('购买被服务器拒绝。');
+      throw Exception('请求中止：服务端已拒绝此项操作。');
     }
   }
 
@@ -203,34 +248,20 @@ class ApiClient {
           final errCode = _extractErrorCode(e.response?.data);
           
           if (code == 404 && errCode == 'route_not_found') {
-             routeExists = false;
-             break; 
+             routeExists = false; break; 
           }
           if (code == 405) {
-             routeExists = false;
-             break;
+             routeExists = false; break;
           }
-
-          routeExists = true;
-          bestErr = e;
+          routeExists = true; bestErr = e;
 
           if (code == 422 || errCode == 'validation_error') continue;
-
-          if (errCode != 'not_found' && code != 404) {
-             throw e;
-          }
+          if (errCode != 'not_found' && code != 404) throw e;
         }
       }
       if (routeExists && bestErr != null) throw bestErr;
     }
-    
-    throw Exception('未匹配到有效的打赏接口。');
-  }
-
-  Future<void> reportPost(int postId, String reason, String? detail) async {
-    await _dio.post('/api/flags', data: {
-      "data": {"type": "flags", "attributes": {"reason": reason, "reasonDetail": detail ?? ""}, "relationships": {"post": {"data": {"type": "posts", "id": postId.toString()}}}}
-    });
+    throw Exception('接口异常：未能匹配适用的赞赏服务。');
   }
 
   Future<void> likePost(int postId, bool isLiked) async {
