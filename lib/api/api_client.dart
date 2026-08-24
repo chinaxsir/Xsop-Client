@@ -143,22 +143,22 @@ class ApiClient {
     return '';
   }
 
-  // 🚨 终极死守指令：不再相信 200，只有 201 才是真实扣款！
+  // 🚨 [铲除幽灵端点，独守唯一通道！]
   Future<void> buyPost(List<String> possibleIds, int discussionId, int postId) async {
     DioException? bestErr;
 
-    // 1. 发送激活订单的 GET 请求 (防拦截机制)
+    // 1. 发送激活订单的 GET 请求 (网页端抓包确定的必须前置动作)
     try {
        await _dio.get('/api/pay-to-read/payment/', queryParameters: {'id': discussionId});
     } catch (_) {}
 
-    // 2. 真实路由精准击杀
+    // 2. 真实扣款路由 (网页端抓包确定的唯一绝对路径)
     final ziivenUrl = '/api/pay-to-read/payment/pay';
     final ziivenPayloads = [
       {"id": discussionId.toString()}, 
       {"id": discussionId},
       {"discussion_id": discussionId},
-      {"data": {"attributes": {"id": discussionId.toString()}}},
+      {"data": {"type": "paytoread", "attributes": {"id": discussionId.toString()}}},
     ];
 
     bool hasTriedZiiven = false;
@@ -168,61 +168,52 @@ class ApiClient {
          final response = await _dio.post(ziivenUrl, data: p);
          hasTriedZiiven = true;
          
-         // 🚨 铁律：只有 201 才是真的创建了扣款订单，其他的统统算作参数被忽略！
-         if (response.statusCode == 201) {
-             return; // 真正的购买成功！放行！
+         // 哪怕是 201 也要严苛体检，防止后端开发者瞎标状态码！
+         if (response.statusCode == 201 || response.statusCode == 200) {
+             
+             // 把返回包拆拉看清楚！
+             if (response.data is Map) {
+                 final dataMap = response.data as Map;
+                 if (dataMap['status'] == 'error' || dataMap['success'] == false || dataMap.containsKey('error')) {
+                     continue; // 是个包着成功外衣的毒药！抛弃，试下一个！
+                 }
+             }
+             
+             final resStr = response.data?.toString().toLowerCase() ?? '';
+             if (resStr.contains('error') || resStr.contains('不足') || resStr.contains('false')) {
+                 continue; // 毒药！抛弃！
+             }
+
+             // 如果过了体检，而且是 201，这才是真金白银的扣款成功！
+             if (response.statusCode == 201) return;
+             
+             // 如果是干净的 200，它可能是扣款成功，也可能只是忽略了参数。
+             // 我们给它一个面子，如果载荷是标准 JSON:API，可能是对的，但是为了安全，只有 201 是绝对真理。
+             continue; 
          }
          
-         // 如果返回 200，说明 Ziiven 插件收到了请求，但它觉得参数不对，
-         // 或者你没钱，它直接把你打发走了，也没有抛出红字报错。
-         // 我们绝对不能把 200 当成功，必须强行抛弃这个 200，继续试下一个参数格式！
          continue; 
 
        } on DioException catch (e) {
          hasTriedZiiven = true;
          final code = e.response?.statusCode;
          if (code == 404 || code == 405) {
-             break; // 如果这路由直接说 404 不存在，那就别试了，说明没装这插件，走下方的保底。
+             break; // 这个路由彻底不通，这站没法打了
          } 
          
          bestErr = e;
          final errStr = e.response?.data?.toString() ?? '';
          if (errStr.contains('不足') || errStr.contains('没钱') || errStr.contains('insufficient') || code == 403) {
-            throw Exception('余额不足或操作受限。'); // 抓到了真正的没钱报错
+            throw Exception('余额不足或操作受限。'); 
          }
        }
     }
     
-    // 如果把所有格式都试完了，而且都是 200 没扣款，或者都被 403 挡住了，那就判定为余额不足。
+    // 所有的通用探针（/api/discussions/{id}/pay 等）已全部删除！
+    // 绝不允许这些“幽灵端点”再伪造 201 欺骗 APP！
+
     if (hasTriedZiiven && bestErr == null) {
-       throw Exception('余额不足或操作受限。'); 
-    }
-
-    // 3. 通用探针保底（同样的铁律）
-    final templates = [
-      '/api/paytoread/{id}',
-      '/api/pay-to-read/{id}',
-      '/api/pay-to-see/{id}',
-      '/api/discussions/{id}/pay',
-    ];
-
-    for (var tmpl in templates) {
-      for (var id in possibleIds) {
-         final ep = tmpl.replaceAll('{id}', id);
-         try {
-           final response = await _dio.post(ep, data: {"data": {}});
-           
-           if (response.statusCode == 201) return; // 只有 201 才算
-           continue; // 200 统统过滤
-
-         } on DioException catch (e) {
-           final code = e.response?.statusCode;
-           if (code == 404 || code == 405 || code == 422) continue;
-           
-           final errStr = e.response?.data?.toString() ?? '';
-           if (errStr.contains('不足') || code == 403) throw Exception('余额不足或操作受限。');
-         }
-      }
+       throw Exception('余额不足或参数未被服务器接收。'); 
     }
 
     if (bestErr != null) {
@@ -230,7 +221,7 @@ class ApiClient {
        if (errStr.contains('不足') || bestErr.response?.statusCode == 403) throw Exception('余额不足或操作受限。');
     }
     
-    throw Exception('购买请求未能执行，服务器拒绝了操作。');
+    throw Exception('购买请求被服务器拒绝。');
   }
 
   Future<void> tipPost(int postId, int amount) async {
