@@ -387,22 +387,17 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
     }
   }
 
-  // [免疫隔离罩：暴力剥离失控的 iframe，变成安全的点击按钮]
   String _sanitizeHtmlForVideo(String htmlContent) {
     if (htmlContent.isEmpty) return htmlContent;
     
-    // 正则表达式：精准捕获所有的 iframe 标签，并将它的 src 地址提取出来
     String safeHtml = htmlContent.replaceAllMapped(
       RegExp(r'<iframe[^>]+src="([^"]+)"[^>]*>.*?</iframe>', caseSensitive: false),
       (match) {
         String url = match.group(1) ?? '';
-        // 修复部分缺少 http/https 的残缺链接（比如 B站常用的 //player.bilibili...）
         if (url.startsWith('//')) {
            url = 'https:$url';
         }
         
-        // 【偷梁换柱】：把原来会破坏屏幕的视频代码，直接变成一段漂亮且绝对安全的原生 HTML 点击块！
-        // 这样底层的 HtmlWidget 就能原生处理点击跳转，彻底切断 B站流氓脚本！
         return '''
         <div style="background-color: #f8f9fa; padding: 20px; border-radius: 12px; text-align: center; border: 1px solid #e9ecef; margin: 16px 0;">
           <p style="margin: 0 0 12px 0; color: #495057; font-size: 15px; font-weight: bold;">▶️ 本帖包含外部视频</p>
@@ -647,7 +642,36 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
            });
         }
         
+        // [核心修正：绝不强行二次上锁] 确保当服务器明确告知“已支付”时，赋予最高解锁豁免权！
+        final discussionAttrs = _discussionData['attributes'] ?? {};
+        bool hasPaid = false;
+        if (attrs['hasPaid'] == true || attrs['isPaid'] == true || attrs['canViewPaidContent'] == true) {
+            hasPaid = true;
+        }
+        if (discussionAttrs['hasPaid'] == true || discussionAttrs['isPaid'] == true) {
+            hasPaid = true;
+        }
+
         bool isPayProtected = false;
+        
+        // 只有当没有买的时候，才去检测那些该死的敏感词
+        if (!hasPaid) {
+            if (attrs['isPay'] == true || attrs['payAmount'] != null || attrs['price'] != null) {
+                isPayProtected = true;
+            }
+            if (plainText.isEmpty && !htmlContent.contains('<img') && !htmlContent.contains('<iframe') && !htmlContent.contains('<video')) {
+                isPayProtected = true;
+            }
+            if (plainText.contains('付费可见') || plainText.contains('需要购买') || rawContent.contains('[pay') || rawContent.contains('[charge')) {
+                isPayProtected = true;
+            }
+        }
+
+        // 作者永远可见
+        if (_currentUser != null && _currentUser!.id == userIdStr) {
+             isPayProtected = false;
+        }
+
         String payAmount = '1';
         String buyersCount = '0';
 
@@ -657,29 +681,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
         if (attrs['paidUsersCount'] != null) buyersCount = attrs['paidUsersCount'].toString();
         else if (attrs['buyersCount'] != null) buyersCount = attrs['buyersCount'].toString();
 
-        String plainText = htmlContent.replaceAll(RegExp(r'<[^>]*>'), '').replaceAll('&nbsp;', '').trim();
-        
-        if (attrs['isPay'] == true || attrs['payAmount'] != null || attrs['price'] != null) {
-            if (attrs['hasPaid'] != true && attrs['isPaid'] != true) {
-                isPayProtected = true;
-            }
-        }
-
-        if (plainText.isEmpty && !htmlContent.contains('<img') && !htmlContent.contains('<iframe') && !htmlContent.contains('<video')) {
-            isPayProtected = true;
-        }
-
-        if (plainText.contains('付费可见') || plainText.contains('需要购买') || rawContent.contains('[pay') || rawContent.contains('[charge')) {
-            isPayProtected = true;
-        }
-
-        if (_currentUser != null && _currentUser!.id == userIdStr) {
-             if (plainText.isNotEmpty || htmlContent.contains('<img')) {
-                 isPayProtected = false;
-             }
-        }
-
-        // 🔥 将原生的 HTML 丢进免疫罩进行脱水净化，彻底镇压视频 iframe
         final safeHtml = _sanitizeHtmlForVideo(htmlContent);
 
         return Container(
@@ -721,7 +722,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                  _buildPayBlock(payAmount, buyersCount, possibleIds.toList(), discussionId, postId) 
               else 
                  HtmlWidget(
-                    safeHtml, // 使用净化后的 HTML 代码
+                    safeHtml, 
                     textStyle: const TextStyle(fontSize: 16, height: 1.6, color: Colors.black87),
                  ),
                  
