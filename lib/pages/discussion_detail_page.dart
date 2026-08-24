@@ -409,7 +409,8 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
     return safeHtml;
   }
   
-  Widget _buildPayBlock(String payAmount, String buyersCount, List<String> possibleIds, int discussionId, int postId) {
+  // [极速 UI：未购买状态的红框]
+  Widget _buildLockedPayBlock(String payAmount, String buyersCount, List<String> possibleIds, int discussionId, int postId) {
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 8),
       padding: const EdgeInsets.all(16),
@@ -427,8 +428,8 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Center(
-                  child: Text('本帖的付费阅读内容', style: TextStyle(color: const Color(0xFFE85055), fontWeight: FontWeight.bold, fontSize: 14)),
+                const Center(
+                  child: Text('本帖的付费阅读内容', style: TextStyle(color: Color(0xFFE85055), fontWeight: FontWeight.bold, fontSize: 14)),
                 ),
                 const SizedBox(height: 16),
                 Row(
@@ -481,8 +482,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                                                 if (mounted) {
                                                   Navigator.pop(ctx); 
                                                   ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('购买成功！请稍候...')));
-                                                  
-                                                  // 强制拉取全局余额和最新帖子状态，彻底击碎假象
                                                   setState(() => _isLoading = true);
                                                   await _loadCurrentUser();
                                                   await _loadDiscussionDetail(); 
@@ -515,6 +514,54 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                     )
                   ],
                 )
+              ],
+            ),
+          )
+        ],
+      ),
+    );
+  }
+
+  // [完美复刻：已购买状态的蓝框，彻底解决白屏 BUG！]
+  Widget _buildUnlockedPayBlock(String safeHtmlContent, String buyersCount) {
+    // 使用正则把核心内容从臃肿的插件 div 壳子里扒出来
+    String coreText = safeHtmlContent;
+    final match = RegExp(r'<div class="ptr-block[^>]+>(.*?)</div>', multiLine: true, dotAll: true).firstMatch(safeHtmlContent);
+    if (match != null && match.group(1) != null) {
+       coreText = match.group(1)!;
+    }
+
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(2),
+      ),
+      child: Stack(
+        children: [
+          Positioned.fill(
+             // 完美复刻网页端的纯正蓝色虚线框
+             child: CustomPaint(painter: _DashedBorderPainter(color: const Color(0xFF1976D2))), 
+          ),
+          Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const SizedBox(width: 40), 
+                    const Text('本帖的付费阅读内容', style: TextStyle(color: Color(0xFF1976D2), fontWeight: FontWeight.bold, fontSize: 14)),
+                    Text('$buyersCount人付费', style: TextStyle(fontSize: 12, color: Colors.grey.shade400)),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                HtmlWidget(
+                   coreText, 
+                   textStyle: const TextStyle(fontSize: 16, height: 1.6, color: Colors.black87),
+                ),
               ],
             ),
           )
@@ -617,25 +664,20 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
         final bool canEdit = attrs['canEdit'] == true;
         final bool canDelete = attrs['canDelete'] == true;
         
+        String plainText = htmlContent.replaceAll(RegExp(r'<[^>]*>'), '').replaceAll('&nbsp;', '').trim();
+
         Set<String> possibleIds = {postId.toString(), discussionId.toString()};
-        
         for (var rels in [post['relationships'] ?? {}, _discussionData['relationships'] ?? {}]) {
            rels.forEach((key, value) {
               if (key.toLowerCase().contains('pay')) {
-                 if (value is Map && value['data'] is Map && value['data']['id'] != null) {
-                    possibleIds.add(value['data']['id'].toString());
-                 }
+                 if (value is Map && value['data'] is Map && value['data']['id'] != null) possibleIds.add(value['data']['id'].toString());
               }
            });
         }
-        
         for (var inc in _included) {
            final t = inc['type']?.toString().toLowerCase() ?? '';
-           if (t.contains('pay')) {
-              possibleIds.add(inc['id'].toString());
-           }
+           if (t.contains('pay')) possibleIds.add(inc['id'].toString());
         }
-        
         for (var at in [attrs, _discussionData['attributes'] ?? {}]) {
            at.forEach((key, value) {
               if (key.toLowerCase().contains('id') || key.toLowerCase().contains('pay')) {
@@ -645,7 +687,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
            });
         }
 
-        // 提取价格，为 UI 显示提供保障
         String payAmount = '1';
         if (attrs['payAmount'] != null) payAmount = attrs['payAmount'].toString();
         else if (attrs['price'] != null) payAmount = attrs['price'].toString();
@@ -658,23 +699,24 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
         if (attrs['paidUsersCount'] != null) buyersCount = attrs['paidUsersCount'].toString();
         else if (attrs['buyersCount'] != null) buyersCount = attrs['buyersCount'].toString();
         
-        
-        // 🚨【终极解码引擎】：完全基于 Ziiven 注入的 HTML 样式标签判定，不再死等 hasPaid 变量！
+        // 🚨 核心判定
         bool isPayProtected = false;
+        bool hasSuccessfullyUnlocked = false; // 是否已经购买/解锁
         
-        // 如果文本里包含锁定的特征词
         if (rawContent.contains('[pay') || rawContent.contains('[charge')) {
-            isPayProtected = true; // 默认它被锁了
+            isPayProtected = true; 
             
-            // 但是！如果 HTML 源码里被插件注入了 "ptr-paid" (已购买标签)，直接原地赦免，强制解锁！
-            if (htmlContent.contains('ptr-paid')) {
+            // 只要检测到 ptr-paid（Ziiven专用解锁标签），立刻解除武装锁定，并升起蓝色虚线框！
+            if (htmlContent.contains('ptr-paid') || htmlContent.contains('ptr-unlocked')) {
                 isPayProtected = false; 
+                hasSuccessfullyUnlocked = true;
             }
         }
 
-        // 作者永远拥有免死金牌
+        // 作者免死金牌
         if (_currentUser != null && _currentUser!.id == userIdStr) {
              isPayProtected = false;
+             if (rawContent.contains('[pay')) hasSuccessfullyUnlocked = true;
         }
 
         final safeHtml = _sanitizeHtmlForVideo(htmlContent);
@@ -714,8 +756,11 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
               ),
               const SizedBox(height: 12),
               
+              // 🚨 UI 智能分流
               if (isPayProtected) 
-                 _buildPayBlock(payAmount, buyersCount, possibleIds.toList(), discussionId, postId) 
+                 _buildLockedPayBlock(payAmount, buyersCount, possibleIds.toList(), discussionId, postId) 
+              else if (hasSuccessfullyUnlocked)
+                 _buildUnlockedPayBlock(safeHtml, buyersCount)
               else 
                  HtmlWidget(
                     safeHtml, 
