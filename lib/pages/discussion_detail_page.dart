@@ -114,7 +114,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
             title: const Text('重命名主题', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
             content: TextField(
               controller: ctrl,
-              decoration: const InputDecoration(hintText: '请输入新的主题标题', border: OutlineInputBorder()),
+              decoration: const InputDecoration(hintText: '请输入新的标题', border: OutlineInputBorder()),
             ),
             actions: [
               TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消', style: TextStyle(color: Colors.grey))),
@@ -128,10 +128,10 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                     await widget.api.updateDiscussion(int.parse(widget.discussion.id), title: newTitle);
                     if (mounted) {
                       Navigator.pop(ctx);
-                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('系统提示：标题修改已保存。')));
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('修改已保存')));
                     }
                   } catch (_) {
-                    if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('系统提示：修改指令执行失败。')));
+                    if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('修改失败')));
                   } finally {
                     if (mounted) setStateDialog(() => isSubmitting = false);
                   }
@@ -139,7 +139,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                 },
                 child: isSubmitting 
                     ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) 
-                    : const Text('确认修改'),
+                    : const Text('确认'),
               ),
             ],
           )
@@ -152,9 +152,9 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
     setState(() => _isLoading = true);
     try {
        await widget.api.updateDiscussion(int.parse(widget.discussion.id), isSticky: isSticky);
-       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('系统提示：状态已更新。')));
+       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('状态已更新')));
     } catch (_) {
-       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('系统提示：操作未能生效。')));
+       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('操作失败')));
     }
     _loadDiscussionDetail();
   }
@@ -163,9 +163,9 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
     setState(() => _isLoading = true);
     try {
        await widget.api.updateDiscussion(int.parse(widget.discussion.id), isLocked: isLocked);
-       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('系统提示：锁定状态已变更。')));
+       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('状态已更新')));
     } catch (_) {
-       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('系统提示：操作未能生效。')));
+       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('操作失败')));
     }
     _loadDiscussionDetail();
   }
@@ -176,13 +176,13 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
       builder: (ctx) => AlertDialog(
         backgroundColor: Colors.white,
         surfaceTintColor: Colors.transparent,
-        title: const Text('删除主题警告', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
-        content: const Text('系统警告：您即将删除此主题及其从属的所有回复数据。此项变更将被永久执行且不可撤销，请确认继续。'),
+        title: const Text('删除主题', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
+        content: const Text('确定要删除此主题及其所有回复吗？此操作不可恢复。'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消', style: TextStyle(color: Colors.grey))),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: Colors.red),
-            onPressed: () => Navigator.pop(ctx, true), child: const Text('确认删除')
+            onPressed: () => Navigator.pop(ctx, true), child: const Text('删除')
           ),
         ],
       )
@@ -199,48 +199,118 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
     } catch (_) {
        if (mounted) {
           setState(() => _isLoading = false);
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('系统提示：删除指令被拒绝。')));
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('删除失败')));
        }
     }
   }
 
+  // 🚨 升级重构：获取服务端真实标签列表，并以复选框形态提供操作
   Future<void> _editTags() async {
-    final ctrl = TextEditingController();
-    await showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: Colors.white,
-        surfaceTintColor: Colors.transparent,
-        title: const Text('主题标签管理'),
-        content: TextField(
-          controller: ctrl,
-          decoration: const InputDecoration(hintText: '输入标签节点ID (逗号分隔)', border: OutlineInputBorder()),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消', style: TextStyle(color: Colors.grey))),
-          FilledButton(onPressed: () async {
-             final ids = ctrl.text.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
-             if (ids.isEmpty) return;
-             Navigator.pop(ctx);
-             setState(() => _isLoading = true);
-             try {
-                await widget.api.updateDiscussion(int.parse(widget.discussion.id), tagIds: ids);
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('系统提示：节点归属已更替。')));
-             } catch (_) {
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('系统提示：操作未能生效。')));
-             }
-             _loadDiscussionDetail();
-          }, child: const Text('保存修改')),
-        ],
-      )
-    );
+    setState(() => _isLoading = true);
+    try {
+      // 1. 获取全站标签列表
+      final tagsRes = await widget.api.getTags();
+      final List<dynamic> tagsData = tagsRes['data'] ?? [];
+      
+      // 2. 获取当前主题已选择的标签
+      final currentTagsData = _discussionData['relationships']?['tags']?['data'] as List<dynamic>? ?? [];
+      List<String> selectedIds = currentTagsData.map((e) => e['id'].toString()).toList();
+
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+
+      // 3. 弹出复选框列表视窗
+      await showDialog(
+        context: context,
+        builder: (ctx) {
+          bool isSubmitting = false;
+          return StatefulBuilder(
+            builder: (ctx, setStateDialog) {
+              return AlertDialog(
+                backgroundColor: Colors.white,
+                surfaceTintColor: Colors.transparent,
+                title: const Text('编辑标签', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                content: Container(
+                  width: double.maxFinite,
+                  constraints: BoxConstraints(
+                    maxHeight: MediaQuery.of(context).size.height * 0.5, // 限制最大高度防止溢出
+                  ),
+                  child: tagsData.isEmpty
+                    ? const Center(child: Text('暂无可用标签'))
+                    : ListView.builder(
+                        shrinkWrap: true,
+                        itemCount: tagsData.length,
+                        itemBuilder: (context, index) {
+                          final tag = tagsData[index];
+                          final tagId = tag['id'].toString();
+                          final tagName = tag['attributes']?['name']?.toString() ?? '未知标签';
+                          final isSelected = selectedIds.contains(tagId);
+
+                          return CheckboxListTile(
+                            title: Text(tagName),
+                            value: isSelected,
+                            activeColor: Theme.of(context).colorScheme.primary,
+                            onChanged: (bool? checked) {
+                              setStateDialog(() {
+                                if (checked == true) {
+                                  selectedIds.add(tagId);
+                                } else {
+                                  selectedIds.remove(tagId);
+                                }
+                              });
+                            },
+                          );
+                        },
+                      ),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx), 
+                    child: const Text('取消', style: TextStyle(color: Colors.grey))
+                  ),
+                  FilledButton(
+                    onPressed: isSubmitting ? null : () async {
+                      if (selectedIds.isEmpty) {
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请至少选择一个标签')));
+                        return;
+                      }
+                      setStateDialog(() => isSubmitting = true);
+                      try {
+                        await widget.api.updateDiscussion(int.parse(widget.discussion.id), tagIds: selectedIds);
+                        if (mounted) {
+                          Navigator.pop(ctx);
+                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('标签已更新')));
+                        }
+                      } catch (_) {
+                        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('操作失败')));
+                      } finally {
+                        if (mounted) setStateDialog(() => isSubmitting = false);
+                      }
+                      _loadDiscussionDetail(); // 刷新页面数据
+                    }, 
+                    child: isSubmitting 
+                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                      : const Text('保存')
+                  ),
+                ],
+              );
+            }
+          );
+        }
+      );
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('获取标签列表失败')));
+      }
+    }
   }
 
   Future<void> _openEditorForEdit(int index) async {
     final post = _posts[index];
     final postId = post['id'];
     
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('正在读取数据，请稍候...')));
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('正在获取内容...')));
     String rawContent = post['attributes']?['content']?.toString() ?? '';
     
     try {
@@ -278,18 +348,18 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
          return AlertDialog(
            backgroundColor: Colors.white,
            surfaceTintColor: Colors.transparent,
-           title: const Text('交互记录详情'),
+           title: const Text('点赞详情'),
            content: Column(
              mainAxisSize: MainAxisSize.min,
              children: [
                ListTile(
                  leading: const Icon(Icons.thumb_up, color: Colors.green),
-                 title: const Text('正向交互数'),
+                 title: const Text('获赞数'),
                  trailing: Text('$upvotes', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Colors.green)),
                ),
              ]
            ),
-           actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('关闭视窗'))]
+           actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('关闭'))]
          );
       }
     );
@@ -309,7 +379,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
             return AlertDialog(
               backgroundColor: Colors.white,
               surfaceTintColor: Colors.transparent,
-              title: const Row(children: [Icon(Icons.report_problem_outlined, color: Colors.orange), SizedBox(width: 8), Text('内容违规报告')]),
+              title: const Row(children: [Icon(Icons.report_problem_outlined, color: Colors.orange), SizedBox(width: 8), Text('举报内容')]),
               content: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -319,18 +389,18 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                     isExpanded: true,
                     decoration: const InputDecoration(border: OutlineInputBorder(), isDense: true),
                     items: const [
-                      DropdownMenuItem(value: 'spam', child: Text('涉嫌垃圾广告')),
-                      DropdownMenuItem(value: 'inappropriate', child: Text('涉嫌违背准则')),
-                      DropdownMenuItem(value: 'off_topic', child: Text('偏离交流主题')),
+                      DropdownMenuItem(value: 'spam', child: Text('垃圾广告')),
+                      DropdownMenuItem(value: 'inappropriate', child: Text('违规内容')),
+                      DropdownMenuItem(value: 'off_topic', child: Text('偏离主题')),
                     ],
                     onChanged: (v) => setStateDialog(() => reason = v ?? 'spam'),
                   ),
                   const SizedBox(height: 16),
-                  TextField(controller: detailCtrl, maxLines: 3, decoration: const InputDecoration(hintText: '请补充具体案由 (选填)', border: OutlineInputBorder())),
+                  TextField(controller: detailCtrl, maxLines: 3, decoration: const InputDecoration(hintText: '补充说明 (选填)', border: OutlineInputBorder())),
                 ],
               ),
               actions: [
-                TextButton(onPressed: () => Navigator.pop(context), child: const Text('撤销', style: TextStyle(color: Colors.grey))),
+                TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消', style: TextStyle(color: Colors.grey))),
                 FilledButton(
                   style: FilledButton.styleFrom(backgroundColor: Colors.orange),
                   onPressed: isSubmitting ? null : () async {
@@ -339,15 +409,15 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                       await widget.api.reportPost(postId, int.parse(_currentUser!.id), reason, detailCtrl.text.trim());
                       if (mounted) {
                         Navigator.pop(context);
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('系统提示：报告已记录，待中心审核。')));
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已提交举报')));
                       }
                     } catch (e) {
-                       if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('系统提示：档案提交中止。')));
+                       if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('操作失败')));
                     } finally {
                       if (mounted) setStateDialog(() => isSubmitting = false);
                     }
                   },
-                  child: isSubmitting ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Text('立案提交'),
+                  child: isSubmitting ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Text('提交'),
                 ),
               ],
             );
@@ -373,28 +443,28 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
             return AlertDialog(
               backgroundColor: Colors.white,
               surfaceTintColor: Colors.transparent,
-              title: const Row(children: [Icon(Icons.warning_amber, color: Colors.redAccent), SizedBox(width: 8), Text('账号行为约束')]),
+              title: const Row(children: [Icon(Icons.warning_amber, color: Colors.redAccent), SizedBox(width: 8), Text('警告用户')]),
               content: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('信誉扣除分额', style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.bold)),
+                    const Text('警告分数', style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 6),
                     TextField(controller: strikesCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(border: OutlineInputBorder(), isDense: true)),
                     const SizedBox(height: 16),
-                    const Text('中心公开批示 (必须提供)', style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.bold)),
+                    const Text('公开评论 (必填)', style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 6),
                     TextField(controller: publicCtrl, maxLines: 2, decoration: const InputDecoration(border: OutlineInputBorder())),
                     const SizedBox(height: 16),
-                    const Text('管理内控案卷 (非公开)', style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.bold)),
+                    const Text('私下备注 (选填)', style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 6),
                     TextField(controller: privateCtrl, maxLines: 2, decoration: const InputDecoration(border: OutlineInputBorder())),
                   ],
                 ),
               ),
               actions: [
-                TextButton(onPressed: () => Navigator.pop(context), child: const Text('暂缓', style: TextStyle(color: Colors.grey))),
+                TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消', style: TextStyle(color: Colors.grey))),
                 FilledButton(
                   style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
                   onPressed: isSubmitting ? null : () async {
@@ -409,10 +479,10 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                       );
                       if (mounted) {
                         Navigator.pop(context);
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('系统提示：账号约束指令已生效。')));
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('操作成功')));
                       }
                     } on DioException catch (e) {
-                       String errMsg = '系统提示：管控授权被拒绝。';
+                       String errMsg = '操作失败';
                        try {
                          final errs = e.response?.data['errors'];
                          if (errs != null && errs is List && errs.isNotEmpty && errs[0]['detail'] != null) {
@@ -424,7 +494,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                       if (mounted) setStateDialog(() => isSubmitting = false);
                     }
                   },
-                  child: isSubmitting ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('执行批示'),
+                  child: isSubmitting ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('确定'),
                 ),
               ],
             );
@@ -459,7 +529,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
           _posts[index]['attributes']['isLiked'] = currentIsLiked;
           _posts[index]['attributes']['likesCount'] = currentLikesCount;
         });
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('系统提示：状态同步中止。')));
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('操作失败')));
       }
     }
   }
@@ -469,10 +539,10 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
       await widget.api.deletePost(postId);
       if (mounted) {
         setState(() { _posts.removeAt(index); });
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('系统提示：数据列已销毁。')));
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('操作成功')));
       }
     } on DioException catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('系统提示：销毁指令未获许可。')));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('操作失败')));
     }
   }
 
@@ -514,8 +584,8 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
         if (url.startsWith('//')) url = 'https:$url';
         return '''
         <div style="background-color: #f8f9fa; padding: 20px; border-radius: 12px; text-align: center; border: 1px solid #e9ecef; margin: 16px 0;">
-          <p style="margin: 0 0 12px 0; color: #495057; font-size: 15px; font-weight: bold;">▶️ 视音频资源载体</p>
-          <a href="$url" style="display: inline-block; background-color: #00a1d6; color: white; padding: 10px 24px; border-radius: 6px; text-decoration: none; font-weight: bold; font-size: 14px;">启用外部安全播放源</a>
+          <p style="margin: 0 0 12px 0; color: #495057; font-size: 15px; font-weight: bold;">▶️ 外部视频</p>
+          <a href="$url" style="display: inline-block; background-color: #00a1d6; color: white; padding: 10px 24px; border-radius: 6px; text-decoration: none; font-weight: bold; font-size: 14px;">在浏览器中播放</a>
         </div>
         ''';
       }
@@ -536,19 +606,19 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           const Center(
-            child: Text('加密阅读节点', style: TextStyle(color: Color(0xFFE85055), fontWeight: FontWeight.bold, fontSize: 14)),
+            child: Text('本帖包含付费阅读内容', style: TextStyle(color: Color(0xFFE85055), fontWeight: FontWeight.bold, fontSize: 14)),
           ),
           const SizedBox(height: 16),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Expanded(
-                child: Text('该节点已被资产保护层锁定。 准入资产: $payAmount XSD', style: const TextStyle(fontSize: 14, color: Colors.black87)),
+                child: Text('作者将该内容设置为付费可见。 价格 $payAmount XSD', style: const TextStyle(fontSize: 14, color: Colors.black87)),
               ),
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                   Text('$buyersCount 名授权账户', style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
+                   Text('$buyersCount 人付费', style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
                    const SizedBox(height: 8),
                    FilledButton(
                      style: FilledButton.styleFrom(
@@ -564,7 +634,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                           return;
                         }
                         if (ptrId.isEmpty) {
-                           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('系统错误：加密节点标识遗失，请切换至桌面端环境。')));
+                           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('解析区块ID失败，请重试。')));
                            return;
                         }
                         if (!mounted) return;
@@ -577,12 +647,12 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                                 return AlertDialog(
                                   backgroundColor: Colors.white,
                                   surfaceTintColor: Colors.transparent,
-                                  title: const Text('授权协议确认', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-                                  content: Text('此操作将从您的账户中划拨 $payAmount XSD 资产以解除节点封锁，是否批准？'),
+                                  title: const Text('确认购买', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+                                  content: Text('是否确认花费 $payAmount XSD 购买此内容？'),
                                   actions: [
                                     TextButton(
                                       onPressed: () => Navigator.pop(ctx),
-                                      child: const Text('终止', style: TextStyle(color: Colors.grey)),
+                                      child: const Text('取消', style: TextStyle(color: Colors.grey)),
                                     ),
                                     FilledButton(
                                       style: FilledButton.styleFrom(backgroundColor: const Color(0xFF526D85)),
@@ -592,7 +662,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                                           await widget.api.buyPost(ptrId, discussionId);
                                           if (mounted) {
                                             Navigator.pop(ctx); 
-                                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('系统提示：资产审核通过，正在解密区块...')));
+                                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('购买成功')));
                                             setState(() => _isLoading = true);
                                             await _loadCurrentUser();
                                             await _loadDiscussionDetail(); 
@@ -610,7 +680,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                                       },
                                       child: isSubmitting 
                                         ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) 
-                                        : const Text('批准支付'),
+                                        : const Text('购买'),
                                     ),
                                   ],
                                 );
@@ -619,7 +689,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                           }
                         );
                      },
-                     child: const Text('授权获取', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                     child: const Text('购买', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
                    )
                 ],
               )
@@ -646,8 +716,8 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               const SizedBox(width: 40), 
-              const Text('✅ 区块已解密', style: TextStyle(color: Color(0xFF1976D2), fontWeight: FontWeight.bold, fontSize: 14)),
-              Text('共有 $buyersCount 项准入记录', style: TextStyle(fontSize: 12, color: Colors.grey.shade400)),
+              const Text('✅ 已解锁的付费内容', style: TextStyle(color: Color(0xFF1976D2), fontWeight: FontWeight.bold, fontSize: 14)),
+              Text('$buyersCount 人付费', style: TextStyle(fontSize: 12, color: Colors.grey.shade400)),
             ],
           ),
           const SizedBox(height: 16),
@@ -696,12 +766,12 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                 else if (val == 'tag') _editTags();
               },
               itemBuilder: (ctx) => [
-                if (canRename) const PopupMenuItem(value: 'rename', child: Row(children: [Icon(Icons.title, size: 18), SizedBox(width: 8), Text('重命名主题')])),
-                if (canSticky) PopupMenuItem(value: 'sticky', child: Row(children: [Icon(isSticky ? Icons.vertical_align_bottom : Icons.vertical_align_top, size: 18), const SizedBox(width: 8), Text(isSticky ? '解除主题置顶' : '执行主题置顶')])),
-                if (canLock) PopupMenuItem(value: 'lock', child: Row(children: [Icon(isLocked ? Icons.lock_open : Icons.lock_outline, size: 18), const SizedBox(width: 8), Text(isLocked ? '解除主帖封锁' : '执行主帖封锁')])),
-                if (canTag) const PopupMenuItem(value: 'tag', child: Row(children: [Icon(Icons.local_offer_outlined, size: 18), SizedBox(width: 8), Text('节点标签分配')])),
+                if (canRename) const PopupMenuItem(value: 'rename', child: Row(children: [Icon(Icons.title, size: 18), SizedBox(width: 8), Text('编辑标题')])),
+                if (canSticky) PopupMenuItem(value: 'sticky', child: Row(children: [Icon(isSticky ? Icons.vertical_align_bottom : Icons.vertical_align_top, size: 18), const SizedBox(width: 8), Text(isSticky ? '取消置顶' : '置顶')])),
+                if (canLock) PopupMenuItem(value: 'lock', child: Row(children: [Icon(isLocked ? Icons.lock_open : Icons.lock_outline, size: 18), const SizedBox(width: 8), Text(isLocked ? '解除锁定' : '锁定')])),
+                if (canTag) const PopupMenuItem(value: 'tag', child: Row(children: [Icon(Icons.local_offer_outlined, size: 18), SizedBox(width: 8), Text('编辑标签')])),
                 if (canDeleteDiscussion) const PopupMenuDivider(),
-                if (canDeleteDiscussion) const PopupMenuItem(value: 'delete', child: Row(children: [Icon(Icons.delete_outline, size: 18, color: Colors.red), SizedBox(width: 8), Text('销毁数据源', style: TextStyle(color: Colors.red))])),
+                if (canDeleteDiscussion) const PopupMenuItem(value: 'delete', child: Row(children: [Icon(Icons.delete_outline, size: 18, color: Colors.red), SizedBox(width: 8), Text('删除主题', style: TextStyle(color: Colors.red))])),
               ]
             )
         ],
@@ -724,7 +794,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                 children: [
                   Icon(Icons.edit, size: 18, color: Colors.grey.shade500),
                   const SizedBox(width: 8),
-                  Text('撰写补充文档...', style: TextStyle(color: Colors.grey.shade500, fontSize: 14)),
+                  Text('写下你的回复...', style: TextStyle(color: Colors.grey.shade500, fontSize: 14)),
                 ],
               ),
             ),
@@ -746,14 +816,14 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
             children: [
               Icon(Icons.warning_amber_rounded, size: 64, color: Colors.red.shade300),
               const SizedBox(height: 16),
-              const Text('加载程序意外终止。', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.red)),
+              const Text('加载失败，请重试。', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.red)),
               const SizedBox(height: 24),
               FilledButton.tonal(
                 onPressed: () {
                   setState(() { _isLoading = true; _error = null; });
                   _loadDiscussionDetail();
                 }, 
-                child: const Text('重启读取进程')
+                child: const Text('重试')
               ),
             ],
           ),
@@ -773,7 +843,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
         final userIdStr = post['relationships']?['user']?['data']?['id']?.toString();
         final FlarumUser? user = userIdStr != null ? _usersMap[userIdStr] : null;
         
-        final username = user?.displayName.isNotEmpty == true ? user!.displayName : (user?.username ?? '已注销账户');
+        final username = user?.displayName.isNotEmpty == true ? user!.displayName : (user?.username ?? '已注销');
         final avatarUrl = user?.avatarUrl;
         final timeStr = attrs['createdAt'] as String?;
         final time = timeStr != null ? DateTime.tryParse(timeStr) : null;
@@ -901,11 +971,10 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                   InkWell(
                     onTap: _openReplyEditor,
                     borderRadius: BorderRadius.circular(16),
-                    child: Padding(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6), child: Text('追加文档', style: TextStyle(color: Colors.grey.shade700, fontSize: 13, fontWeight: FontWeight.w500))),
+                    child: Padding(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6), child: Text('回复', style: TextStyle(color: Colors.grey.shade700, fontSize: 13, fontWeight: FontWeight.w500))),
                   ),
                   const SizedBox(width: 8),
                   
-                  // 🚨 剔除旧版的“资产打赏”
                   PopupMenuButton<String>(
                     icon: Icon(Icons.more_horiz, color: Colors.grey.shade500),
                     color: Colors.white,
@@ -925,17 +994,12 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                       else if (value == 'vote') _showVoteDetails(index);
                     },
                     itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
-                      
-                      if (canSeeVotes) const PopupMenuItem<String>(value: 'vote', child: Row(children: [Icon(Icons.how_to_vote_outlined, size: 18, color: Colors.blueAccent), SizedBox(width: 8), Text('交互日志记录')])),
-                      
-                      if (canFlag && userIdStr != _currentUser?.id) const PopupMenuItem<String>(value: 'report', child: Row(children: [Icon(Icons.report_problem_outlined, size: 18, color: Colors.orange), SizedBox(width: 8), Text('上报违规')])),
-                      
-                      if (canEdit) const PopupMenuItem<String>(value: 'edit', child: Row(children: [Icon(Icons.edit_outlined, size: 18), SizedBox(width: 8), Text('修订文档')])),
-                      
-                      if (canWarn) const PopupMenuItem<String>(value: 'warn', child: Row(children: [Icon(Icons.info_outline, size: 18, color: Colors.redAccent), SizedBox(width: 8), Text('下达账号约束')])),
-                      
+                      if (canSeeVotes) const PopupMenuItem<String>(value: 'vote', child: Row(children: [Icon(Icons.how_to_vote_outlined, size: 18, color: Colors.blueAccent), SizedBox(width: 8), Text('点赞详情')])),
+                      if (canFlag && userIdStr != _currentUser?.id) const PopupMenuItem<String>(value: 'report', child: Row(children: [Icon(Icons.report_problem_outlined, size: 18, color: Colors.orange), SizedBox(width: 8), Text('举报')])),
+                      if (canEdit) const PopupMenuItem<String>(value: 'edit', child: Row(children: [Icon(Icons.edit_outlined, size: 18), SizedBox(width: 8), Text('编辑')])),
+                      if (canWarn) const PopupMenuItem<String>(value: 'warn', child: Row(children: [Icon(Icons.info_outline, size: 18, color: Colors.redAccent), SizedBox(width: 8), Text('警告')])),
                       if (canDelete) const PopupMenuDivider(),
-                      if (canDelete) const PopupMenuItem<String>(value: 'delete', child: Row(children: [Icon(Icons.delete_outline, size: 18, color: Colors.red), SizedBox(width: 8), Text('抹除数据列', style: TextStyle(color: Colors.red))])),
+                      if (canDelete) const PopupMenuItem<String>(value: 'delete', child: Row(children: [Icon(Icons.delete_outline, size: 18, color: Colors.red), SizedBox(width: 8), Text('删除', style: TextStyle(color: Colors.red))])),
                     ],
                   ),
                 ],
