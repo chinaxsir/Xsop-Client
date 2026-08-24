@@ -480,9 +480,12 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                                                 await widget.api.buyPost(possibleIds, discussionId, postId);
                                                 if (mounted) {
                                                   Navigator.pop(ctx); 
-                                                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('购买成功！')));
+                                                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('购买成功！请稍候...')));
+                                                  
+                                                  // 强制拉取全局余额和最新帖子状态，彻底击碎假象
                                                   setState(() => _isLoading = true);
-                                                  _loadDiscussionDetail(); 
+                                                  await _loadCurrentUser();
+                                                  await _loadDiscussionDetail(); 
                                                 }
                                               } catch (e) {
                                                 if (mounted) {
@@ -614,9 +617,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
         final bool canEdit = attrs['canEdit'] == true;
         final bool canDelete = attrs['canDelete'] == true;
         
-        // 声明纯文本变量以用于拦截判断
-        String plainText = htmlContent.replaceAll(RegExp(r'<[^>]*>'), '').replaceAll('&nbsp;', '').trim();
-
         Set<String> possibleIds = {postId.toString(), discussionId.toString()};
         
         for (var rels in [post['relationships'] ?? {}, _discussionData['relationships'] ?? {}]) {
@@ -644,42 +644,38 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
               }
            });
         }
-        
-        final discussionAttrs = _discussionData['attributes'] ?? {};
-        bool hasPaid = false;
-        if (attrs['hasPaid'] == true || attrs['isPaid'] == true || attrs['canViewPaidContent'] == true) {
-            hasPaid = true;
-        }
-        if (discussionAttrs['hasPaid'] == true || discussionAttrs['isPaid'] == true) {
-            hasPaid = true;
+
+        // 提取价格，为 UI 显示提供保障
+        String payAmount = '1';
+        if (attrs['payAmount'] != null) payAmount = attrs['payAmount'].toString();
+        else if (attrs['price'] != null) payAmount = attrs['price'].toString();
+        else {
+           final match = RegExp(r'amount=([0-9\.]+)').firstMatch(rawContent);
+           if (match != null) payAmount = match.group(1) ?? '1';
         }
 
+        String buyersCount = '0';
+        if (attrs['paidUsersCount'] != null) buyersCount = attrs['paidUsersCount'].toString();
+        else if (attrs['buyersCount'] != null) buyersCount = attrs['buyersCount'].toString();
+        
+        
+        // 🚨【终极解码引擎】：完全基于 Ziiven 注入的 HTML 样式标签判定，不再死等 hasPaid 变量！
         bool isPayProtected = false;
         
-        if (!hasPaid) {
-            if (attrs['isPay'] == true || attrs['payAmount'] != null || attrs['price'] != null) {
-                isPayProtected = true;
-            }
-            if (plainText.isEmpty && !htmlContent.contains('<img') && !htmlContent.contains('<iframe') && !htmlContent.contains('<video')) {
-                isPayProtected = true;
-            }
-            if (plainText.contains('付费可见') || plainText.contains('需要购买') || rawContent.contains('[pay') || rawContent.contains('[charge')) {
-                isPayProtected = true;
+        // 如果文本里包含锁定的特征词
+        if (rawContent.contains('[pay') || rawContent.contains('[charge')) {
+            isPayProtected = true; // 默认它被锁了
+            
+            // 但是！如果 HTML 源码里被插件注入了 "ptr-paid" (已购买标签)，直接原地赦免，强制解锁！
+            if (htmlContent.contains('ptr-paid')) {
+                isPayProtected = false; 
             }
         }
 
+        // 作者永远拥有免死金牌
         if (_currentUser != null && _currentUser!.id == userIdStr) {
              isPayProtected = false;
         }
-
-        String payAmount = '1';
-        String buyersCount = '0';
-
-        if (attrs['payAmount'] != null) payAmount = attrs['payAmount'].toString();
-        else if (attrs['price'] != null) payAmount = attrs['price'].toString();
-        
-        if (attrs['paidUsersCount'] != null) buyersCount = attrs['paidUsersCount'].toString();
-        else if (attrs['buyersCount'] != null) buyersCount = attrs['buyersCount'].toString();
 
         final safeHtml = _sanitizeHtmlForVideo(htmlContent);
 
