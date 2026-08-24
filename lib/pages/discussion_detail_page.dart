@@ -99,9 +99,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
     }
   }
 
-  // 🚨 新增：重命名主题管理操作
   Future<void> _renameDiscussion() async {
-    // 默认展示最新拉取到的标题，否则降级展示传入的旧标题
     final String currentTitle = _discussionData['attributes']?['title'] ?? widget.discussion.title;
     final ctrl = TextEditingController(text: currentTitle);
     
@@ -137,7 +135,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                   } finally {
                     if (mounted) setStateDialog(() => isSubmitting = false);
                   }
-                  // 重新加载后，上方 AppBar 中的标题会根据 _discussionData 动态更新
                   _loadDiscussionDetail();
                 },
                 child: isSubmitting 
@@ -268,71 +265,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
       setState(() => _isLoading = true);
       _loadDiscussionDetail();
     }
-  }
-
-  Future<void> _showTipDialog(int postId) async {
-    final amountController = TextEditingController();
-
-    await showDialog(
-      context: context,
-      builder: (context) {
-        bool isSubmitting = false;
-        return StatefulBuilder(
-          builder: (context, setStateDialog) {
-            return AlertDialog(
-              backgroundColor: Colors.white,
-              surfaceTintColor: Colors.transparent,
-              title: const Row(children: [Icon(Icons.card_giftcard, color: Colors.orange), SizedBox(width: 8), Text('金额赞赏')]),
-              content: TextField(
-                controller: amountController,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(hintText: '请输入赞赏数额', border: OutlineInputBorder()),
-              ),
-              actions: [
-                TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消', style: TextStyle(color: Colors.grey))),
-                FilledButton(
-                  style: FilledButton.styleFrom(backgroundColor: Colors.orange),
-                  onPressed: isSubmitting ? null : () async {
-                    final amount = int.tryParse(amountController.text.trim());
-                    if (amount == null || amount <= 0) {
-                       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('错误：数额无效，请重新输入。')));
-                       return;
-                    }
-                    setStateDialog(() => isSubmitting = true);
-                    try {
-                      await widget.api.tipPost(postId, amount);
-                      if (mounted) {
-                        Navigator.pop(context);
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('系统提示：资产划拨成功。')));
-                      }
-                    } catch (e) {
-                      if (mounted) {
-                         String errMsg = '系统错误：操作被拦截。';
-                         if (e is DioException) {
-                            try {
-                               final rawData = e.response?.data;
-                               if (rawData != null && rawData is Map && rawData['errors'] != null && rawData['errors'].isNotEmpty) {
-                                 errMsg = rawData['errors'][0]['detail'] ?? '终止代码: ${rawData['errors'][0]['code']}';
-                               }
-                            } catch (_) {}
-                         } else {
-                            errMsg = e.toString().replaceAll('Exception: ', '');
-                         }
-                         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg), duration: const Duration(seconds: 4)));
-                         Navigator.pop(context); 
-                      }
-                    } finally {
-                      if (mounted) setStateDialog(() => isSubmitting = false);
-                    }
-                  },
-                  child: isSubmitting ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('确认交易'),
-                ),
-              ],
-            );
-          }
-        );
-      }
-    );
   }
 
   void _showVoteDetails(int index) {
@@ -730,7 +662,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
 
   @override
   Widget build(BuildContext context) {
-    // 🚨 根据载荷动态生成【系统管理权限】
     final dAttrs = _discussionData['attributes'] ?? {};
     final bool canRename = dAttrs['canRename'] == true;
     final bool canSticky = dAttrs['canSticky'] == true;
@@ -739,8 +670,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
     final bool canDeleteDiscussion = dAttrs['canDelete'] == true;
     final bool isSticky = dAttrs['isSticky'] == true;
     final bool isLocked = dAttrs['isLocked'] == true;
-    
-    // 动态提取标题
     final String currentTitle = dAttrs['title'] ?? widget.discussion.title;
 
     return Scaffold(
@@ -854,7 +783,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
         final isLiked = attrs['isLiked'] ?? false;
         final likesCount = attrs['likesCount'] ?? 0;
 
-        // 🚨 完全受控于 API 的【动态权限审核机制】
         final bool canEdit = attrs['canEdit'] == true;
         final bool canDelete = attrs['canDelete'] == true;
         final bool canFlag = attrs['canFlag'] == true;
@@ -977,6 +905,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                   ),
                   const SizedBox(width: 8),
                   
+                  // 🚨 剔除旧版的“资产打赏”
                   PopupMenuButton<String>(
                     icon: Icon(Icons.more_horiz, color: Colors.grey.shade500),
                     color: Colors.white,
@@ -991,13 +920,11 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                       final postIdInt = int.parse(_posts[index]['id']);
                       if (value == 'edit') _openEditorForEdit(index);
                       else if (value == 'delete') _deletePost(postIdInt, index);
-                      else if (value == 'tip') _showTipDialog(postIdInt);
                       else if (value == 'warn') _showWarnDialog(postIdInt, userIdStr);
                       else if (value == 'report') _showReportDialog(postIdInt);
                       else if (value == 'vote') _showVoteDetails(index);
                     },
                     itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
-                      const PopupMenuItem<String>(value: 'tip', child: Row(children: [Icon(Icons.card_giftcard, size: 18, color: Colors.orange), SizedBox(width: 8), Text('资产打赏')])),
                       
                       if (canSeeVotes) const PopupMenuItem<String>(value: 'vote', child: Row(children: [Icon(Icons.how_to_vote_outlined, size: 18, color: Colors.blueAccent), SizedBox(width: 8), Text('交互日志记录')])),
                       
