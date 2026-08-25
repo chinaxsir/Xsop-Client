@@ -39,7 +39,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
     super.initState();
     _loadDiscussionDetail();
     _loadCurrentUser();
-    // 进贴时静默更新一下全局配置（获取最新货币名称）
     widget.api.getForumInfo().catchError((_) => <String, dynamic>{});
   }
 
@@ -555,7 +554,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Expanded(
-                // 🚨 UI：动态应用全局货币名称
                 child: Text('作者将该内容设置为付费可见。 价格 $payAmount ${widget.api.currencyName}', style: const TextStyle(fontSize: 14, color: Colors.black87)),
               ),
               Column(
@@ -974,34 +972,54 @@ class _TagSelectorSheet extends StatefulWidget {
 }
 
 class _TagSelectorSheetState extends State<_TagSelectorSheet> {
-  final List<dynamic> _primaryTags = [];
+  final List<dynamic> _primaryRootTags = [];
+  final Map<String, List<dynamic>> _primaryChildTags = {}; 
   final List<dynamic> _secondaryTags = [];
   
-  String? _selectedPrimaryId;
+  String? _selectedPrimaryRootId;
+  String? _selectedChildId; 
   final List<String> _selectedSecondaryIds = [];
 
   @override
   void initState() {
     super.initState();
-    // 严格按 Flarum API 规范拆分主次标签：
-    // Flarum 中次标签是没有 position 且不是子标签的独立节点，其他均划入主选择池
+    
+    // 🚨 第一步：精准分离【主标签】、【子标签】与【次标签】
     for (var tag in widget.allTags) {
       final attrs = tag['attributes'] ?? {};
       final bool isChild = attrs['isChild'] == true;
       final bool hasPosition = attrs['position'] != null;
 
-      if (!hasPosition && !isChild) {
-        _secondaryTags.add(tag);
+      if (isChild) {
+        // 如果是子节点，提取出它的父节点 ID 挂载进去
+        final parentId = tag['relationships']?['parent']?['data']?['id']?.toString();
+        if (parentId != null) {
+          _primaryChildTags.putIfAbsent(parentId, () => []).add(tag);
+        }
+      } else if (hasPosition) {
+        // 带有排序值且不是子节点的，必定是顶级主标签
+        _primaryRootTags.add(tag);
       } else {
-        _primaryTags.add(tag);
+        // 没有排序值且游离在外的，就是次标签
+        _secondaryTags.add(tag);
       }
     }
 
+    // 🚨 第二步：还原当前帖子已选中的配置状态
     for (var id in widget.initialSelectedIds) {
-      if (_primaryTags.any((t) => t['id'] == id)) {
-        _selectedPrimaryId = id;
+      if (_primaryRootTags.any((t) => t['id'] == id)) {
+        _selectedPrimaryRootId = id;
       } else if (_secondaryTags.any((t) => t['id'] == id)) {
         if (_selectedSecondaryIds.length < 2) _selectedSecondaryIds.add(id);
+      } else {
+        // 如果上面都没匹配到，那它肯定是一个子标签！找出它的父标签自动勾上
+        for (var entry in _primaryChildTags.entries) {
+          if (entry.value.any((t) => t['id'] == id)) {
+            _selectedChildId = id;
+            _selectedPrimaryRootId = entry.key; 
+            break;
+          }
+        }
       }
     }
   }
@@ -1010,7 +1028,7 @@ class _TagSelectorSheetState extends State<_TagSelectorSheet> {
   Widget build(BuildContext context) {
     return Container(
       padding: EdgeInsets.only(bottom: MediaQuery.of(context).padding.bottom),
-      constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.85),
+      constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.9),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -1025,11 +1043,12 @@ class _TagSelectorSheetState extends State<_TagSelectorSheet> {
                 const Text('编辑标签', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                 TextButton(
                   onPressed: () {
-                    if (_selectedPrimaryId == null) {
+                    if (_selectedPrimaryRootId == null) {
                       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请至少选择1个主标签')));
                       return;
                     }
-                    final result = [_selectedPrimaryId!];
+                    final result = [_selectedPrimaryRootId!];
+                    if (_selectedChildId != null) result.add(_selectedChildId!);
                     result.addAll(_selectedSecondaryIds);
                     widget.onSave(result);
                   },
@@ -1042,30 +1061,61 @@ class _TagSelectorSheetState extends State<_TagSelectorSheet> {
             child: ListView(
               padding: const EdgeInsets.all(16),
               children: [
+                // ================= 层级 1：顶级主标签 =================
                 const Text('选择主标签 (必选1个)', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.grey)),
                 const SizedBox(height: 12),
-                if (_primaryTags.isEmpty) const Text('无可用主标签', style: TextStyle(color: Colors.grey)),
+                if (_primaryRootTags.isEmpty) const Text('无可用主标签', style: TextStyle(color: Colors.grey)),
                 Wrap(
                   spacing: 8,
                   runSpacing: 8,
-                  children: _primaryTags.map((tag) {
+                  children: _primaryRootTags.map((tag) {
                     final id = tag['id'].toString();
                     final name = tag['attributes']?['name']?.toString() ?? '未知';
-                    final isSelected = _selectedPrimaryId == id;
+                    final isSelected = _selectedPrimaryRootId == id;
                     return ChoiceChip(
                       label: Text(name),
                       selected: isSelected,
                       selectedColor: Theme.of(context).colorScheme.primaryContainer,
                       onSelected: (selected) {
                         setState(() {
-                          if (selected) _selectedPrimaryId = id;
+                          if (selected) {
+                             _selectedPrimaryRootId = id;
+                             _selectedChildId = null; // 🚨 切换主节点时，自动清空旧主节点的子标签选择
+                          }
                         });
                       },
                     );
                   }).toList(),
                 ),
-                const SizedBox(height: 24),
                 
+                // ================= 层级 2：动态显隐的专属子标签 =================
+                if (_selectedPrimaryRootId != null && _primaryChildTags.containsKey(_selectedPrimaryRootId)) ...[
+                  const SizedBox(height: 24),
+                  const Text('选择专属子标签 (可选)', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.grey)),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: _primaryChildTags[_selectedPrimaryRootId]!.map((tag) {
+                      final id = tag['id'].toString();
+                      final name = tag['attributes']?['name']?.toString() ?? '未知';
+                      final isSelected = _selectedChildId == id;
+                      return ChoiceChip(
+                        label: Text(name),
+                        selected: isSelected,
+                        selectedColor: Theme.of(context).colorScheme.primaryContainer,
+                        onSelected: (selected) {
+                          setState(() {
+                            _selectedChildId = selected ? id : null;
+                          });
+                        },
+                      );
+                    }).toList(),
+                  ),
+                ],
+                
+                // ================= 层级 3：独立的次标签 =================
+                const SizedBox(height: 24),
                 const Text('选择次标签 (最多可选2个)', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.grey)),
                 const SizedBox(height: 12),
                 if (_secondaryTags.isEmpty) const Text('无可用次标签', style: TextStyle(color: Colors.grey)),
