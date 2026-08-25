@@ -33,38 +33,14 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
   List<dynamic> _included = [];
   
   FlarumUser? _currentUser;
-  
-  // 🚨 动态交易货币名称（默认值为 XSD，加载时自动向网页端同步）
-  String _currencyName = 'XSD'; 
 
   @override
   void initState() {
     super.initState();
     _loadDiscussionDetail();
     _loadCurrentUser();
-    _loadForumCurrencyConfig(); // 异步同步全局货币配置
-  }
-
-  // 🚨 全新组件：静默拉取论坛最新配置，解析并提纯货币名称
-  Future<void> _loadForumCurrencyConfig() async {
-    try {
-      final info = await widget.api.getForumInfo();
-      final attrs = info['data']?['attributes'];
-      if (attrs != null) {
-         String rawName = attrs['shebaoting-money.moneyname']?.toString() 
-                       ?? attrs['antoinefr-money.moneyname']?.toString() 
-                       ?? 'XSD';
-         
-         // 过滤掉类似 [money] 的图标代码前缀，提纯名称
-         rawName = rawName.replaceAll(RegExp(r'\[.*?\]'), '').trim();
-         
-         if (rawName.isNotEmpty && mounted) {
-            setState(() => _currencyName = rawName);
-         }
-      }
-    } catch (_) {
-      // 就算网络抖动获取失败，也毫不影响使用，安静地使用默认值即可
-    }
+    // 进贴时静默更新一下全局配置（获取最新货币名称）
+    widget.api.getForumInfo().catchError((_) => <String, dynamic>{});
   }
 
   Future<void> _loadCurrentUser() async {
@@ -559,7 +535,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
     return safeHtml;
   }
   
-  // 🚨 UI：渲染时直接拼接同步到的动态货币名称 `_currencyName`
   Widget _buildLockedPayBlock(String payAmount, String buyersCount, String ptrId, int discussionId) {
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 8),
@@ -580,7 +555,8 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Expanded(
-                child: Text('作者将该内容设置为付费可见。 价格 $payAmount $_currencyName', style: const TextStyle(fontSize: 14, color: Colors.black87)),
+                // 🚨 UI：动态应用全局货币名称
+                child: Text('作者将该内容设置为付费可见。 价格 $payAmount ${widget.api.currencyName}', style: const TextStyle(fontSize: 14, color: Colors.black87)),
               ),
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
@@ -615,7 +591,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                                   backgroundColor: Colors.white,
                                   surfaceTintColor: Colors.transparent,
                                   title: const Text('确认购买', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-                                  content: Text('是否确认花费 $payAmount $_currencyName 购买此内容？'),
+                                  content: Text('是否确认花费 $payAmount ${widget.api.currencyName} 购买此内容？'),
                                   actions: [
                                     TextButton(
                                       onPressed: () => Navigator.pop(ctx),
@@ -980,7 +956,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
 }
 
 // ============================================================================
-// 🚨 遵循 Flarum 物理层交互逻辑与官方术语的【可视化标签选择器】
+// 🚨 完美对齐 Flarum 物理交互逻辑的可视化【节点标签选择器】
 // ============================================================================
 class _TagSelectorSheet extends StatefulWidget {
   final List<dynamic> allTags;
@@ -1007,14 +983,17 @@ class _TagSelectorSheetState extends State<_TagSelectorSheet> {
   @override
   void initState() {
     super.initState();
-    // 严格按 Flarum API 规范拆分主次标签 (带有 position 且非子节点为大类主标签)
+    // 严格按 Flarum API 规范拆分主次标签：
+    // Flarum 中次标签是没有 position 且不是子标签的独立节点，其他均划入主选择池
     for (var tag in widget.allTags) {
       final attrs = tag['attributes'] ?? {};
-      final bool isPrimary = attrs['position'] != null && attrs['isChild'] != true;
-      if (isPrimary) {
-        _primaryTags.add(tag);
-      } else {
+      final bool isChild = attrs['isChild'] == true;
+      final bool hasPosition = attrs['position'] != null;
+
+      if (!hasPosition && !isChild) {
         _secondaryTags.add(tag);
+      } else {
+        _primaryTags.add(tag);
       }
     }
 
