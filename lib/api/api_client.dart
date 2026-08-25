@@ -9,6 +9,9 @@ class ApiClient {
 
   final Dio _dio;
   final String baseUrl;
+  
+  // 🚨 全局动态货币名称：APP 任何页面都可以直接调用 api.currencyName 获取最新名称
+  String currencyName = 'XSD'; 
 
   ApiClient({this.baseUrl = 'https://xsop.de'}) : _dio = Dio(BaseOptions(
     baseUrl: baseUrl,
@@ -37,9 +40,23 @@ class ApiClient {
     ));
   }
 
+  // 🚨 升级：每次请求全站信息时，自动刷新并缓存全局货币名称
   Future<Map<String, dynamic>> getForumInfo() async {
     final response = await _dio.get('/api');
-    return _asMap(response.data);
+    final data = _asMap(response.data);
+    
+    final attrs = data['data']?['attributes'];
+    if (attrs != null) {
+       String rawName = attrs['shebaoting-money.moneyname']?.toString() 
+                     ?? attrs['antoinefr-money.moneyname']?.toString() 
+                     ?? 'XSD';
+       // 提纯名称，去掉类似 [money] 的图标前缀
+       rawName = rawName.replaceAll(RegExp(r'\[.*?\]'), '').trim();
+       if (rawName.isNotEmpty) {
+          currencyName = rawName;
+       }
+    }
+    return data;
   }
 
   Future<String?> getToken() async {
