@@ -204,104 +204,45 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
     }
   }
 
-  // 🚨 升级重构：获取服务端真实标签列表，并以复选框形态提供操作
+  // 🚨 升级重构：完全遵循 Flarum 原生规则的【可视化标签选择器】
   Future<void> _editTags() async {
     setState(() => _isLoading = true);
     try {
-      // 1. 获取全站标签列表
       final tagsRes = await widget.api.getTags();
-      final List<dynamic> tagsData = tagsRes['data'] ?? [];
+      final List<dynamic> allTags = tagsRes['data'] ?? [];
       
-      // 2. 获取当前主题已选择的标签
       final currentTagsData = _discussionData['relationships']?['tags']?['data'] as List<dynamic>? ?? [];
-      List<String> selectedIds = currentTagsData.map((e) => e['id'].toString()).toList();
+      List<String> initialSelectedIds = currentTagsData.map((e) => e['id'].toString()).toList();
 
       if (!mounted) return;
       setState(() => _isLoading = false);
 
-      // 3. 弹出复选框列表视窗
-      await showDialog(
+      await showModalBottomSheet(
         context: context,
-        builder: (ctx) {
-          bool isSubmitting = false;
-          return StatefulBuilder(
-            builder: (ctx, setStateDialog) {
-              return AlertDialog(
-                backgroundColor: Colors.white,
-                surfaceTintColor: Colors.transparent,
-                title: const Text('编辑标签', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                content: Container(
-                  width: double.maxFinite,
-                  constraints: BoxConstraints(
-                    maxHeight: MediaQuery.of(context).size.height * 0.5, // 限制最大高度防止溢出
-                  ),
-                  child: tagsData.isEmpty
-                    ? const Center(child: Text('暂无可用标签'))
-                    : ListView.builder(
-                        shrinkWrap: true,
-                        itemCount: tagsData.length,
-                        itemBuilder: (context, index) {
-                          final tag = tagsData[index];
-                          final tagId = tag['id'].toString();
-                          final tagName = tag['attributes']?['name']?.toString() ?? '未知标签';
-                          final isSelected = selectedIds.contains(tagId);
-
-                          return CheckboxListTile(
-                            title: Text(tagName),
-                            value: isSelected,
-                            activeColor: Theme.of(context).colorScheme.primary,
-                            onChanged: (bool? checked) {
-                              setStateDialog(() {
-                                if (checked == true) {
-                                  selectedIds.add(tagId);
-                                } else {
-                                  selectedIds.remove(tagId);
-                                }
-                              });
-                            },
-                          );
-                        },
-                      ),
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.pop(ctx), 
-                    child: const Text('取消', style: TextStyle(color: Colors.grey))
-                  ),
-                  FilledButton(
-                    onPressed: isSubmitting ? null : () async {
-                      if (selectedIds.isEmpty) {
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请至少选择一个标签')));
-                        return;
-                      }
-                      setStateDialog(() => isSubmitting = true);
-                      try {
-                        await widget.api.updateDiscussion(int.parse(widget.discussion.id), tagIds: selectedIds);
-                        if (mounted) {
-                          Navigator.pop(ctx);
-                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('标签已更新')));
-                        }
-                      } catch (_) {
-                        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('操作失败')));
-                      } finally {
-                        if (mounted) setStateDialog(() => isSubmitting = false);
-                      }
-                      _loadDiscussionDetail(); // 刷新页面数据
-                    }, 
-                    child: isSubmitting 
-                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                      : const Text('保存')
-                  ),
-                ],
-              );
-            }
-          );
-        }
+        isScrollControlled: true,
+        backgroundColor: Colors.white,
+        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+        builder: (ctx) => _TagSelectorSheet(
+          allTags: allTags,
+          initialSelectedIds: initialSelectedIds,
+          onSave: (List<String> newTagIds) async {
+             Navigator.pop(ctx);
+             setState(() => _isLoading = true);
+             try {
+                await widget.api.updateDiscussion(int.parse(widget.discussion.id), tagIds: newTagIds);
+                if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('标签更新成功')));
+             } catch (_) {
+                if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('操作失败')));
+             }
+             _loadDiscussionDetail();
+          }
+        )
       );
+
     } catch (e) {
       if (mounted) {
         setState(() => _isLoading = false);
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('获取标签列表失败')));
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('读取节点数据失败')));
       }
     }
   }
@@ -1008,6 +949,152 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
           ),
         );
       },
+    );
+  }
+}
+
+// 🚨 独立组件：符合 Flarum 物理交互规则的标签选择层
+class _TagSelectorSheet extends StatefulWidget {
+  final List<dynamic> allTags;
+  final List<String> initialSelectedIds;
+  final Function(List<String>) onSave;
+
+  const _TagSelectorSheet({
+    required this.allTags,
+    required this.initialSelectedIds,
+    required this.onSave,
+  });
+
+  @override
+  State<_TagSelectorSheet> createState() => _TagSelectorSheetState();
+}
+
+class _TagSelectorSheetState extends State<_TagSelectorSheet> {
+  final List<dynamic> _primaryTags = [];
+  final List<dynamic> _secondaryTags = [];
+  
+  String? _selectedPrimaryId;
+  final List<String> _selectedSecondaryIds = [];
+
+  @override
+  void initState() {
+    super.initState();
+    // 严格按 Flarum API 规范拆分主次标签
+    for (var tag in widget.allTags) {
+      final attrs = tag['attributes'] ?? {};
+      final bool isPrimary = attrs['position'] != null && attrs['isChild'] != true;
+      if (isPrimary) {
+        _primaryTags.add(tag);
+      } else {
+        _secondaryTags.add(tag);
+      }
+    }
+
+    for (var id in widget.initialSelectedIds) {
+      if (_primaryTags.any((t) => t['id'] == id)) {
+        _selectedPrimaryId = id;
+      } else if (_secondaryTags.any((t) => t['id'] == id)) {
+        if (_selectedSecondaryIds.length < 2) _selectedSecondaryIds.add(id);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).padding.bottom),
+      constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.85),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: const BoxDecoration(
+              border: Border(bottom: BorderSide(color: Color(0xFFE5E5EA), width: 0.5)),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text('编辑标签', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                TextButton(
+                  onPressed: () {
+                    if (_selectedPrimaryId == null) {
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请至少选择1个主标签')));
+                      return;
+                    }
+                    final result = [_selectedPrimaryId!];
+                    result.addAll(_selectedSecondaryIds);
+                    widget.onSave(result);
+                  },
+                  child: const Text('保存', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                )
+              ],
+            ),
+          ),
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                const Text('选择主标签 (必选1个)', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.grey)),
+                const SizedBox(height: 12),
+                if (_primaryTags.isEmpty) const Text('无可用主标签', style: TextStyle(color: Colors.grey)),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: _primaryTags.map((tag) {
+                    final id = tag['id'].toString();
+                    final name = tag['attributes']?['name']?.toString() ?? '未知';
+                    final isSelected = _selectedPrimaryId == id;
+                    return ChoiceChip(
+                      label: Text(name),
+                      selected: isSelected,
+                      selectedColor: Theme.of(context).colorScheme.primaryContainer,
+                      onSelected: (selected) {
+                        setState(() {
+                          if (selected) _selectedPrimaryId = id;
+                        });
+                      },
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(height: 24),
+                
+                const Text('选择次标签 (最多可选2个)', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.grey)),
+                const SizedBox(height: 12),
+                if (_secondaryTags.isEmpty) const Text('无可用次标签', style: TextStyle(color: Colors.grey)),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: _secondaryTags.map((tag) {
+                    final id = tag['id'].toString();
+                    final name = tag['attributes']?['name']?.toString() ?? '未知';
+                    final isSelected = _selectedSecondaryIds.contains(id);
+                    return FilterChip(
+                      label: Text(name),
+                      selected: isSelected,
+                      selectedColor: Theme.of(context).colorScheme.primaryContainer,
+                      onSelected: (selected) {
+                        setState(() {
+                          if (selected) {
+                            if (_selectedSecondaryIds.length < 2) {
+                              _selectedSecondaryIds.add(id);
+                            } else {
+                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('最多只能选择2个次标签')));
+                            }
+                          } else {
+                            _selectedSecondaryIds.remove(id);
+                          }
+                        });
+                      },
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(height: 24),
+              ],
+            ),
+          )
+        ],
+      ),
     );
   }
 }
