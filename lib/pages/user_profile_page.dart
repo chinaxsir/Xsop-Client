@@ -202,7 +202,8 @@ class _UserProfilePageState extends State<UserProfilePage> {
                       const SizedBox(width: 6),
                       const Text('0', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                       const SizedBox(width: 12),
-                      Text('$_balance XSD', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                      // 🚨 已在此处接入全局动态货币名称
+                      Text('$_balance ${widget.api.currencyName}', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                     ],
                   ),
                 ),
@@ -220,7 +221,6 @@ class _UserProfilePageState extends State<UserProfilePage> {
           const SizedBox(height: 12),
           _buildSectionTitle('个人记录'),
           _buildMenuGroup([
-            // 完美替换为积分记录
             _MenuAction(icon: Icons.payments_outlined, title: '积分记录', color: Colors.amber, onTap: () => _navigateToActivity('积分记录', 'money-log')),
             _MenuAction(icon: Icons.warning_amber_rounded, title: warningTitle, color: Colors.red, onTap: () => _navigateToActivity('站务警告', 'warnings')),
           ]),
