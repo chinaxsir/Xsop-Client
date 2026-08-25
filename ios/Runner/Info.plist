@@ -13,7 +13,7 @@
     <string>zh_CN</string>
 
     <key>CFBundleDisplayName</key>
-    <string>XSOP 论坛</string>
+    <string>主页加载...</string>
 
     <key>CFBundleExecutable</key>
     <string>$(EXECUTABLE_NAME)</string>
