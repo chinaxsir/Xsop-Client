@@ -187,12 +187,38 @@ class _UserActivityPageState extends State<UserActivityPage> {
         _items = finalItems;
         _customEmptyMessage = '暂无积分记录';
       }
-      // 🚨 新增：打赏明细解析逻辑
-      else if (widget.activityType == 'money-rewards') {
-        final res = await _safeFetch('/api/money-rewards', {'include': 'user,targetUser,post,post.discussion'});
-        _items = res['data'] ?? [];
-        _included = res['included'] ?? [];
-        _customEmptyMessage = '暂无打赏记录';
+      // 🚨 终极修复：打赏明细多重交叉拉取引擎
+      else if (widget.activityType.contains('reward')) {
+        _customEmptyMessage = '暂无打赏明细';
+        
+        // 分别发起“我是打赏人”、“我是接收人”以及“全站广域查询”的请求，防止后端参数拦截
+        final results = await Future.wait([
+          _safeFetch('/api/money-rewards', {'filter[user]': uid, 'include': 'user,targetUser,post,post.discussion'}),
+          _safeFetch('/api/money-rewards', {'filter[targetUser]': uid, 'include': 'user,targetUser,post,post.discussion'}),
+          _safeFetch('/api/money-rewards', {'include': 'user,targetUser,post,post.discussion'}),
+          _safeFetch('/api/users/$uid/money-rewards', {'include': 'user,targetUser,post,post.discussion'}),
+        ]);
+
+        final Map<String, dynamic> uniqueMap = {};
+        for (var res in results) {
+          for(var i in _extractData(res['data'])) {
+            if (i['id'] != null) uniqueMap[i['id'].toString()] = i;
+          }
+          _included.addAll(_extractData(res['included']));
+        }
+        
+        final List<dynamic> finalItems = [];
+        for (var item in uniqueMap.values) {
+           // 双重判定：关联节点 ID 或 属性原生 ID
+           final sourceUserId = item['relationships']?['user']?['data']?['id']?.toString() ?? item['attributes']?['userId']?.toString();
+           final targetUserId = item['relationships']?['targetUser']?['data']?['id']?.toString() ?? item['attributes']?['targetUserId']?.toString();
+           
+           // 只要当前记录的“发出方”或“接收方”是当前登录用户，就提纯保留
+           if (sourceUserId == uid || targetUserId == uid) {
+              finalItems.add(item);
+           }
+        }
+        _items = finalItems;
       }
 
       if (_items.isNotEmpty) {
@@ -214,9 +240,9 @@ class _UserActivityPageState extends State<UserActivityPage> {
             if (e.response?.statusCode == 404) {
                _items = []; _error = null; 
             } else if (e.response?.statusCode == 403) {
-               _error = '无权限查看该数据';
+               _error = '权限不足，无法查阅此数据';
             } else {
-               _error = '加载失败，请稍后重试';
+               _error = '网络请求失败，请重试';
             }
           } else {
              _error = '加载失败：${e.toString()}';
@@ -310,23 +336,23 @@ class _UserActivityPageState extends State<UserActivityPage> {
         if (widget.activityType == 'warnings') return _buildWarningItem(item);
         if (widget.activityType == 'money-log') return _buildMoneyLogItem(item); 
         if (widget.activityType == 'posts') return _buildPostItem(item);
-        if (widget.activityType == 'money-rewards') return _buildMoneyRewardItem(item); // 🚨 打赏明细分发器
+        if (widget.activityType.contains('reward')) return _buildMoneyRewardItem(item); // 渲染打赏明细
         
         return _buildDefaultItem(item);
       },
     );
   }
 
-  // 🚨 全新组件：打赏明细 UI，严格复刻网页端卡片
+  // 🚨 对齐网页端样式的“打赏明细”渲染器
   Widget _buildMoneyRewardItem(Map<String, dynamic> item) {
     final attrs = item['attributes'] ?? {};
     
     final amount = attrs['amount']?.toString() ?? '0';
     final comment = attrs['comment']?.toString() ?? '无评论';
     
-    final sourceUserId = item['relationships']?['user']?['data']?['id']?.toString();
-    final targetUserId = item['relationships']?['targetUser']?['data']?['id']?.toString();
-    final postId = item['relationships']?['post']?['data']?['id']?.toString();
+    final sourceUserId = item['relationships']?['user']?['data']?['id']?.toString() ?? attrs['userId']?.toString();
+    final targetUserId = item['relationships']?['targetUser']?['data']?['id']?.toString() ?? attrs['targetUserId']?.toString();
+    final postId = item['relationships']?['post']?['data']?['id']?.toString() ?? attrs['postId']?.toString();
     
     final sourceUser = _getIncluded('users', sourceUserId);
     final targetUser = _getIncluded('users', targetUserId);
@@ -367,26 +393,27 @@ class _UserActivityPageState extends State<UserActivityPage> {
         children: [
           Row(
             children: [
-              Icon(Icons.card_giftcard, size: 16, color: Colors.grey.shade500),
+              Icon(Icons.card_giftcard, size: 16, color: Colors.grey.shade400),
               const SizedBox(width: 8),
               Text(timeDisplay, style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
               const Spacer(),
-              Text('$amount ${widget.api.currencyName}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.black87)),
+              Text('$amount ${widget.api.currencyName}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.black87)),
             ],
           ),
-          const SizedBox(height: 12),
-          Row(
+          const SizedBox(height: 14),
+          Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 6,
+            runSpacing: 8,
             children: [
               Text('来自', style: TextStyle(color: Colors.grey.shade500, fontSize: 13)),
-              const SizedBox(width: 6),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                 decoration: BoxDecoration(color: Colors.grey.shade100, borderRadius: BorderRadius.circular(4)),
                 child: Text(sourceName, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 4),
               Text('给', style: TextStyle(color: Colors.grey.shade500, fontSize: 13)),
-              const SizedBox(width: 6),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                 decoration: BoxDecoration(color: Colors.grey.shade100, borderRadius: BorderRadius.circular(4)),
@@ -396,7 +423,7 @@ class _UserActivityPageState extends State<UserActivityPage> {
           ),
           const SizedBox(height: 12),
           Text('给「$discussionTitle」主题的 #$postNumber 帖', style: const TextStyle(color: Colors.black87, fontSize: 13)),
-          const SizedBox(height: 8),
+          const SizedBox(height: 12),
           Container(
              width: double.infinity,
              padding: const EdgeInsets.all(10),
