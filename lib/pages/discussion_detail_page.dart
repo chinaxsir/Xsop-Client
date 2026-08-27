@@ -140,8 +140,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
       if (mounted) {
         setState(() {
           if (e is DioException) {
-            String msg = '加载失败 (状态码: ${e.response?.statusCode})';
-            _error = msg;
+            _error = '加载失败 (状态码: ${e.response?.statusCode})';
           } else {
             _error = '加载失败：${e.toString()}';
           }
@@ -228,8 +227,8 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
       builder: (ctx) => AlertDialog(
         backgroundColor: Colors.white,
         surfaceTintColor: Colors.transparent,
-        title: const Text('删除', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
-        content: const Text('确定要删除此主题吗？'),
+        title: const Text('删除主题', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
+        content: const Text('确定要删除此主题及其所有回复吗？此操作不可恢复。'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消', style: TextStyle(color: Colors.grey))),
           FilledButton(
@@ -403,12 +402,12 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('举报成功')));
                       }
                     } catch (e) {
-                       if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('举报失败')));
+                       if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('操作失败')));
                     } finally {
                       if (mounted) setStateDialog(() => isSubmitting = false);
                     }
                   },
-                  child: isSubmitting ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Text('举报'),
+                  child: isSubmitting ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Text('提交'),
                 ),
               ],
             );
@@ -444,11 +443,11 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                     const SizedBox(height: 6),
                     TextField(controller: strikesCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(border: OutlineInputBorder(), isDense: true)),
                     const SizedBox(height: 16),
-                    const Text('公开评论', style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.bold)),
+                    const Text('公开评论 (必填)', style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 6),
                     TextField(controller: publicCtrl, maxLines: 2, decoration: const InputDecoration(border: OutlineInputBorder())),
                     const SizedBox(height: 16),
-                    const Text('私下备注', style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.bold)),
+                    const Text('私下备注 (可选)', style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 6),
                     TextField(controller: privateCtrl, maxLines: 2, decoration: const InputDecoration(border: OutlineInputBorder())),
                   ],
@@ -470,7 +469,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                       );
                       if (mounted) {
                         Navigator.pop(context);
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('警告成功')));
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('操作成功')));
                       }
                     } on DioException catch (e) {
                        String errMsg = '操作失败';
@@ -587,21 +586,21 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                           return;
                        }
                        if (val < _tipMin || val > _tipMax) {
-                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('金额须在 $_tipMin 到 $_tipMax 之间')));
+                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('金额需在 $_tipMin - $_tipMax 之间')));
                           return;
                        }
                        final strVal = amountController.text.trim();
                        if (strVal.contains('.')) {
                           final decimals = strVal.split('.')[1].length;
                           if (decimals > _tipDecimals) {
-                             ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('小数点位数不能超过 $_tipDecimals 位')));
+                             ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('小数点最多 $_tipDecimals 位')));
                              return;
                           }
                        }
                        finalAmount = val;
                     } else {
                        if (selectedPreset == null) {
-                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请选择打赏金额')));
+                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请选择金额')));
                           return;
                        }
                        finalAmount = selectedPreset!;
@@ -609,7 +608,7 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
 
                     final comment = commentController.text.trim();
                     if (comment.isEmpty) {
-                       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请输入评论内容')));
+                       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请输入评论')));
                        return;
                     }
 
@@ -993,7 +992,10 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
         final bool canDelete = attrs['canDelete'] == true;
         final bool canFlag = attrs['canFlag'] == true;
         final bool canSeeVotes = attrs['canSeeVotes'] == true;
-        final bool canRewardWithMoney = attrs['rewardWithMoney'] == true;
+        
+        // 由于不同插件的变量名可能不同，提供最基础的安全放行
+        final bool canRewardWithMoney = attrs.containsKey('rewardWithMoney') ? attrs['rewardWithMoney'] == true : true;
+        
         final bool canWarn = _isModerator && userIdStr != _currentUser?.id;
 
         String payAmount = '1';
