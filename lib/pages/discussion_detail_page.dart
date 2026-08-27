@@ -238,7 +238,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
           }
         )
       );
-
     } catch (e) {
       if (mounted) {
         setState(() => _isLoading = false);
@@ -436,6 +435,97 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                     }
                   },
                   child: isSubmitting ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('确定'),
+                ),
+              ],
+            );
+          }
+        );
+      }
+    );
+  }
+
+  // 🚨 新增：重构的高级官方打赏模块
+  Future<void> _showAdvancedTipDialog(int postId, String authorName) async {
+    final amountController = TextEditingController();
+    final commentController = TextEditingController();
+
+    await showDialog(
+      context: context,
+      builder: (context) {
+        bool isSubmitting = false;
+        return StatefulBuilder(
+          builder: (context, setStateDialog) {
+            return AlertDialog(
+              backgroundColor: Colors.white,
+              surfaceTintColor: Colors.transparent,
+              title: const Text('打赏', style: TextStyle(fontWeight: FontWeight.bold)),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('正在打赏给用户：$authorName', style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
+                    const SizedBox(height: 16),
+                    const Text('金额', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 6),
+                    TextField(
+                      controller: amountController,
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      decoration: InputDecoration(
+                        hintText: '请输入金额...', 
+                        suffixText: widget.api.currencyName,
+                        border: const OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    const Text('评论（公开）', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 6),
+                    TextField(
+                      controller: commentController,
+                      maxLines: 3,
+                      decoration: const InputDecoration(
+                        hintText: '写下你想对作者说的话...', 
+                        border: OutlineInputBorder()
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消', style: TextStyle(color: Colors.grey))),
+                FilledButton(
+                  style: FilledButton.styleFrom(backgroundColor: const Color(0xFF526D85)),
+                  onPressed: isSubmitting ? null : () async {
+                    final amount = double.tryParse(amountController.text.trim());
+                    final comment = commentController.text.trim();
+                    if (amount == null || amount <= 0) {
+                       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('系统提示：输入的数额无效')));
+                       return;
+                    }
+                    if (comment.isEmpty) {
+                       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('系统提示：必须填写评论内容')));
+                       return;
+                    }
+
+                    setStateDialog(() => isSubmitting = true);
+                    try {
+                      await widget.api.tipPost(postId, amount, comment);
+                      if (mounted) {
+                        Navigator.pop(context);
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('打赏成功，感谢您的支持！')));
+                        _loadDiscussionDetail(); // 刷新获取最新点赞数或打赏记录
+                      }
+                    } catch (e) {
+                      if (mounted) {
+                         String pureMsg = e.toString().replaceAll('Exception: ', '');
+                         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(pureMsg)));
+                      }
+                    } finally {
+                      if (mounted) setStateDialog(() => isSubmitting = false);
+                    }
+                  },
+                  child: isSubmitting ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('提交'),
                 ),
               ],
             );
@@ -798,6 +888,10 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
         final bool canDelete = attrs['canDelete'] == true;
         final bool canFlag = attrs['canFlag'] == true;
         final bool canSeeVotes = attrs['canSeeVotes'] == true;
+        
+        // 🚨 动态检查当前服务器是否准许展示打赏入口
+        final bool canRewardWithMoney = attrs['rewardWithMoney'] == true;
+        
         final bool canWarn = _isModerator && userIdStr != _currentUser?.id;
 
         String payAmount = '1';
@@ -933,12 +1027,21 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
                       else if (value == 'warn') _showWarnDialog(postIdInt, userIdStr);
                       else if (value == 'report') _showReportDialog(postIdInt);
                       else if (value == 'vote') _showVoteDetails(index);
+                      // 🚨 触发打赏流程
+                      else if (value == 'tip') _showAdvancedTipDialog(postIdInt, username); 
                     },
                     itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
+                      // 🚨 动态载入官方打赏通道
+                      if (canRewardWithMoney) const PopupMenuItem<String>(value: 'tip', child: Row(children: [Icon(Icons.card_giftcard, size: 18, color: Colors.orange), SizedBox(width: 8), Text('打赏')])),
+                      
                       if (canSeeVotes) const PopupMenuItem<String>(value: 'vote', child: Row(children: [Icon(Icons.how_to_vote_outlined, size: 18, color: Colors.blueAccent), SizedBox(width: 8), Text('点赞详情')])),
+                      
                       if (canFlag && userIdStr != _currentUser?.id) const PopupMenuItem<String>(value: 'report', child: Row(children: [Icon(Icons.report_problem_outlined, size: 18, color: Colors.orange), SizedBox(width: 8), Text('举报')])),
+                      
                       if (canEdit) const PopupMenuItem<String>(value: 'edit', child: Row(children: [Icon(Icons.edit_outlined, size: 18), SizedBox(width: 8), Text('编辑')])),
+                      
                       if (canWarn) const PopupMenuItem<String>(value: 'warn', child: Row(children: [Icon(Icons.info_outline, size: 18, color: Colors.redAccent), SizedBox(width: 8), Text('警告')])),
+                      
                       if (canDelete) const PopupMenuDivider(),
                       if (canDelete) const PopupMenuItem<String>(value: 'delete', child: Row(children: [Icon(Icons.delete_outline, size: 18, color: Colors.red), SizedBox(width: 8), Text('删除', style: TextStyle(color: Colors.red))])),
                     ],
@@ -953,9 +1056,6 @@ class _DiscussionDetailPageState extends State<DiscussionDetailPage> {
   }
 }
 
-// ============================================================================
-// 🚨 完美对齐 Flarum 物理交互逻辑的可视化【节点标签选择器】
-// ============================================================================
 class _TagSelectorSheet extends StatefulWidget {
   final List<dynamic> allTags;
   final List<String> initialSelectedIds;
@@ -983,36 +1083,29 @@ class _TagSelectorSheetState extends State<_TagSelectorSheet> {
   @override
   void initState() {
     super.initState();
-    
-    // 🚨 第一步：精准分离【主标签】、【子标签】与【次标签】
     for (var tag in widget.allTags) {
       final attrs = tag['attributes'] ?? {};
       final bool isChild = attrs['isChild'] == true;
       final bool hasPosition = attrs['position'] != null;
 
       if (isChild) {
-        // 如果是子节点，提取出它的父节点 ID 挂载进去
         final parentId = tag['relationships']?['parent']?['data']?['id']?.toString();
         if (parentId != null) {
           _primaryChildTags.putIfAbsent(parentId, () => []).add(tag);
         }
       } else if (hasPosition) {
-        // 带有排序值且不是子节点的，必定是顶级主标签
         _primaryRootTags.add(tag);
       } else {
-        // 没有排序值且游离在外的，就是次标签
         _secondaryTags.add(tag);
       }
     }
 
-    // 🚨 第二步：还原当前帖子已选中的配置状态
     for (var id in widget.initialSelectedIds) {
       if (_primaryRootTags.any((t) => t['id'] == id)) {
         _selectedPrimaryRootId = id;
       } else if (_secondaryTags.any((t) => t['id'] == id)) {
         if (_selectedSecondaryIds.length < 2) _selectedSecondaryIds.add(id);
       } else {
-        // 如果上面都没匹配到，那它肯定是一个子标签！找出它的父标签自动勾上
         for (var entry in _primaryChildTags.entries) {
           if (entry.value.any((t) => t['id'] == id)) {
             _selectedChildId = id;
@@ -1061,7 +1154,6 @@ class _TagSelectorSheetState extends State<_TagSelectorSheet> {
             child: ListView(
               padding: const EdgeInsets.all(16),
               children: [
-                // ================= 层级 1：顶级主标签 =================
                 const Text('选择主标签 (必选1个)', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.grey)),
                 const SizedBox(height: 12),
                 if (_primaryRootTags.isEmpty) const Text('无可用主标签', style: TextStyle(color: Colors.grey)),
@@ -1080,7 +1172,7 @@ class _TagSelectorSheetState extends State<_TagSelectorSheet> {
                         setState(() {
                           if (selected) {
                              _selectedPrimaryRootId = id;
-                             _selectedChildId = null; // 🚨 切换主节点时，自动清空旧主节点的子标签选择
+                             _selectedChildId = null; 
                           }
                         });
                       },
@@ -1088,7 +1180,6 @@ class _TagSelectorSheetState extends State<_TagSelectorSheet> {
                   }).toList(),
                 ),
                 
-                // ================= 层级 2：动态显隐的专属子标签 =================
                 if (_selectedPrimaryRootId != null && _primaryChildTags.containsKey(_selectedPrimaryRootId)) ...[
                   const SizedBox(height: 24),
                   const Text('选择专属子标签 (可选)', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.grey)),
@@ -1114,7 +1205,6 @@ class _TagSelectorSheetState extends State<_TagSelectorSheet> {
                   ),
                 ],
                 
-                // ================= 层级 3：独立的次标签 =================
                 const SizedBox(height: 24),
                 const Text('选择次标签 (最多可选2个)', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.grey)),
                 const SizedBox(height: 12),
