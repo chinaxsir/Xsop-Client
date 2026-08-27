@@ -208,54 +208,66 @@ class ApiClient {
     try {
       final response = await _dio.post(ziivenUrl, data: {"id": ptrId});
       if (response.statusCode == 201) return; 
-      throw Exception('操作异常：状态码校验失败，请查验系统日志。');
+      throw Exception('操作失败');
     } on DioException catch (e) {
       final code = e.response?.statusCode;
       final errStr = e.response?.data?.toString() ?? '';
       
       if (errStr.contains('不足') || errStr.contains('没钱') || errStr.contains('insufficient') || code == 403) {
-         throw Exception('系统拒绝：账户资产不足或无相关操作权限。'); 
+         throw Exception('余额不足或没有权限'); 
       }
       if (code == 404 || code == 405) {
-         throw Exception('系统错误：未能定位相关处理接口。');
+         throw Exception('接口不存在');
       }
-      throw Exception('请求中止：服务端已拒绝此项操作。');
+      throw Exception('操作失败');
     }
   }
 
-  // 🚨 全新：精准对接 money-rewards 插件结构的打赏功能
+  // 🚨 修正：严格对齐用户截图的精准打赏载荷
   Future<void> tipPost(int postId, double amount, String comment) async {
-    try {
-      await _dio.post('/api/money-rewards', data: {
-        "data": {
-          "type": "money-rewards",
+    final payload = {
+       "data": {
           "attributes": {
-            "amount": amount.toString(),
-            "createMoney": false,
-            "comment": comment
-          },
-          "relationships": {
-            "post": {
-              "data": {"type": "posts", "id": postId.toString()}
-            }
+             "amount": amount.toString(),
+             "createMoney": false,
+             "comment": comment
           }
+       }
+    };
+    
+    // 尝试两个最有可能的打赏端点
+    final endpoints = [
+       '/api/posts/$postId/money-rewards',
+       '/api/money-rewards'
+    ];
+
+    DioException? bestErr;
+    
+    for (var ep in endpoints) {
+        try {
+           final response = await _dio.post(ep, data: payload);
+           if (response.statusCode == 201 || response.statusCode == 200) return;
+        } on DioException catch (e) {
+           bestErr = e;
+           final code = e.response?.statusCode;
+           if (code == 404 || code == 405) continue; 
+           throw Exception(_extractApiError(e) ?? '打赏失败');
         }
-      });
-    } on DioException catch (e) {
-      throw Exception(_extractApiError(e) ?? '系统提示：资产划拨未能完成。');
+    }
+    
+    if (bestErr != null) {
+       throw Exception(_extractApiError(bestErr) ?? '打赏失败');
     }
   }
 
-  // 🚨 全新：发送重置密码邮件
   Future<void> sendPasswordReset(String email) async {
     try {
       await _dio.post('/api/forgot', data: {"email": email});
     } on DioException catch (e) {
-      throw Exception(_extractApiError(e) ?? '发送重置密码邮件失败，请检查邮箱地址是否正确。');
+      throw Exception(_extractApiError(e) ?? '发送重置邮件失败');
     }
   }
 
-  // 🚨 全新：带鉴权的更改邮箱操作
   Future<void> changeEmail(int userId, String newEmail, String password) async {
     try {
       await _dio.patch('/api/users/$userId', data: {
@@ -267,7 +279,7 @@ class ApiClient {
         "meta": {"password": password}
       });
     } on DioException catch (e) {
-      throw Exception(_extractApiError(e) ?? '更改邮箱失败，请确认密码是否正确。');
+      throw Exception(_extractApiError(e) ?? '操作失败');
     }
   }
 
@@ -317,12 +329,17 @@ class ApiClient {
     return <String, dynamic>{};
   }
 
-  // 智能提取服务端返回的具体错误信息（如“邮箱已被采用”）
+  // 🚨 升级报错解析器：精准定位 "邮箱已被采用" 等服务器原生错误
   String? _extractApiError(DioException e) {
     try {
       final data = e.response?.data;
-      if (data is Map && data['errors'] is List && data['errors'].isNotEmpty) {
-        return data['errors'][0]['detail']?.toString();
+      if (data is Map) {
+        if (data['errors'] is List && data['errors'].isNotEmpty) {
+          return data['errors'][0]['detail']?.toString();
+        }
+        if (data['message'] != null) {
+          return data['message'].toString();
+        }
       }
     } catch (_) {}
     return null;
