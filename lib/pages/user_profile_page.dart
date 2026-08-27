@@ -142,7 +142,6 @@ class _UserProfilePageState extends State<UserProfilePage> {
                   final inputEmail = emailCtrl.text.trim();
                   if (inputEmail.isEmpty) return;
                   
-                  // 🚨 严密拦截：邮箱校验
                   if (_currentEmail != null && _currentEmail!.isNotEmpty && inputEmail != _currentEmail) {
                       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('输入的邮箱与当前账号不一致')));
                       return;
@@ -210,7 +209,13 @@ class _UserProfilePageState extends State<UserProfilePage> {
                     await widget.api.changeEmail(int.parse(_user!.id), emailCtrl.text.trim(), pwdCtrl.text.trim());
                     if (mounted) {
                       Navigator.pop(ctx);
-                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('修改成功')));
+                      // 🚨 严密修正：采用官方标准业务描述，告知用户实际发生的安全核验流程
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('系统已发送验证邮件，请前往新邮箱点击链接激活生效。'),
+                          duration: Duration(seconds: 4),
+                        )
+                      );
                       _loadUserProfile(); 
                     }
                   } catch (e) {
