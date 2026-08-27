@@ -7,7 +7,6 @@ import 'package:xsop_forum/pages/user_activity_page.dart';
 
 class UserProfilePage extends StatefulWidget {
   final ApiClient api;
-  // [修复编译错误 1]：接收 home_page 传来的 user 参数
   final FlarumUser? user; 
 
   const UserProfilePage({
@@ -25,14 +24,12 @@ class _UserProfilePageState extends State<UserProfilePage> {
   FlarumUser? _user;
   String? _error;
   
-  // [修复编译错误 2]：将动态数据剥离出来，用独立的变量存储，避开 FlarumUser 严格的数据模型
   String _balance = '0';
   int _warningCount = 0;
 
   @override
   void initState() {
     super.initState();
-    // 如果外部传了初步的用户信息，先显示出来
     if (widget.user != null) {
       _user = widget.user;
     }
@@ -50,23 +47,19 @@ class _UserProfilePageState extends State<UserProfilePage> {
         return;
       }
       
-      // 拉取底层最完整的用户 JSON 数据
       final data = await widget.api.getUser(userId);
       
       if (mounted) {
         setState(() {
           _user = parseUser(data, widget.api.baseUrl);
           
-          // [绕过模型直接提取属性]：直接从原始 data 字典里掏出我们需要的数据
           try {
              final attrs = data['data']?['attributes'] ?? {};
              
-             // 1. 提取余额
              if (attrs.containsKey('money')) {
                 _balance = attrs['money'].toString();
              }
              
-             // 2. 提取警告次数
              if (attrs['warningCount'] != null) {
                 _warningCount = int.tryParse(attrs['warningCount'].toString()) ?? 0;
              } else if (attrs['strikes'] != null) {
@@ -74,9 +67,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
              } else {
                 _warningCount = 0;
              }
-          } catch (_) {
-             // 容错处理
-          }
+          } catch (_) {}
 
           _isLoading = false;
         });
@@ -91,7 +82,6 @@ class _UserProfilePageState extends State<UserProfilePage> {
     }
   }
 
-  // 返回后自动无感刷新最新数据，确保警告或积分的实时性
   void _navigateToActivity(String title, String type) async {
     if (_user == null) return;
     await Navigator.push(
@@ -105,7 +95,6 @@ class _UserProfilePageState extends State<UserProfilePage> {
         ),
       ),
     );
-    // 返回个人中心时，后台静默刷新数据
     if (mounted) {
       _loadUserProfile();
     }
@@ -116,6 +105,147 @@ class _UserProfilePageState extends State<UserProfilePage> {
     if (mounted) {
       Navigator.pop(context, true); 
     }
+  }
+
+  // 🚨 账号安全：发送重置密码邮件
+  void _showChangePasswordDialog() {
+    final emailCtrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        bool isSubmitting = false;
+        return StatefulBuilder(
+          builder: (ctx, setStateDialog) => AlertDialog(
+            backgroundColor: Colors.white,
+            surfaceTintColor: Colors.transparent,
+            title: const Row(children: [Icon(Icons.lock_reset, color: Colors.blueAccent), SizedBox(width: 8), Text('更改密码')]),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text('点击按钮发送重置链接到您的邮箱以重置密码。', style: TextStyle(color: Colors.grey, fontSize: 14)),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: emailCtrl,
+                  decoration: const InputDecoration(hintText: '请输入您的注册邮箱', border: OutlineInputBorder(), isDense: true),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消', style: TextStyle(color: Colors.grey))),
+              FilledButton(
+                style: FilledButton.styleFrom(backgroundColor: const Color(0xFF526D85)),
+                onPressed: isSubmitting ? null : () async {
+                  if (emailCtrl.text.trim().isEmpty) return;
+                  setStateDialog(() => isSubmitting = true);
+                  try {
+                    await widget.api.sendPasswordReset(emailCtrl.text.trim());
+                    if (mounted) {
+                      Navigator.pop(ctx);
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已发送重置密码邮件，请查收')));
+                    }
+                  } catch (e) {
+                    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString().replaceAll('Exception: ', ''))));
+                  } finally {
+                    if (mounted) setStateDialog(() => isSubmitting = false);
+                  }
+                }, 
+                child: isSubmitting ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('发送重置密码邮件')
+              ),
+            ],
+          )
+        );
+      }
+    );
+  }
+
+  // 🚨 账号安全：更改绑定邮箱
+  void _showChangeEmailDialog() {
+    if (_user == null) return;
+    final emailCtrl = TextEditingController();
+    final pwdCtrl = TextEditingController();
+    
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        bool isSubmitting = false;
+        return StatefulBuilder(
+          builder: (ctx, setStateDialog) => AlertDialog(
+            backgroundColor: Colors.white,
+            surfaceTintColor: Colors.transparent,
+            title: const Row(children: [Icon(Icons.email_outlined, color: Colors.blueAccent), SizedBox(width: 8), Text('更改邮箱')]),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: emailCtrl,
+                  decoration: const InputDecoration(hintText: '新邮箱地址', border: OutlineInputBorder(), isDense: true),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: pwdCtrl,
+                  obscureText: true,
+                  decoration: const InputDecoration(hintText: '确认密码', border: OutlineInputBorder(), isDense: true),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消', style: TextStyle(color: Colors.grey))),
+              FilledButton(
+                style: FilledButton.styleFrom(backgroundColor: const Color(0xFF526D85)),
+                onPressed: isSubmitting ? null : () async {
+                  if (emailCtrl.text.trim().isEmpty || pwdCtrl.text.trim().isEmpty) return;
+                  setStateDialog(() => isSubmitting = true);
+                  try {
+                    await widget.api.changeEmail(int.parse(_user!.id), emailCtrl.text.trim(), pwdCtrl.text.trim());
+                    if (mounted) {
+                      Navigator.pop(ctx);
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('邮箱更改指令已提交')));
+                      _loadUserProfile(); 
+                    }
+                  } catch (e) {
+                    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString().replaceAll('Exception: ', ''))));
+                  } finally {
+                    if (mounted) setStateDialog(() => isSubmitting = false);
+                  }
+                }, 
+                child: isSubmitting ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('保存')
+              ),
+            ],
+          )
+        );
+      }
+    );
+  }
+
+  // 🚨 账号设置菜单唤出底栏
+  void _showAccountSettingsMenu() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(margin: const EdgeInsets.symmetric(vertical: 8), width: 40, height: 4, decoration: BoxDecoration(color: Colors.grey.shade300, borderRadius: BorderRadius.circular(2))),
+            const Padding(padding: EdgeInsets.symmetric(vertical: 8), child: Text('账号安全设置', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold))),
+            ListTile(
+              leading: const Icon(Icons.lock_reset, color: Colors.blueAccent),
+              title: const Text('更改密码'),
+              trailing: const Icon(Icons.chevron_right, size: 20),
+              onTap: () { Navigator.pop(ctx); _showChangePasswordDialog(); },
+            ),
+            ListTile(
+              leading: const Icon(Icons.email_outlined, color: Colors.blueAccent),
+              title: const Text('更改邮箱'),
+              trailing: const Icon(Icons.chevron_right, size: 20),
+              onTap: () { Navigator.pop(ctx); _showChangeEmailDialog(); },
+            ),
+            const SizedBox(height: 16),
+          ]
+        ),
+      )
+    );
   }
 
   @override
@@ -188,7 +318,6 @@ class _UserProfilePageState extends State<UserProfilePage> {
                 Text('@${_user!.username}', style: TextStyle(fontSize: 14, color: Colors.grey.shade500)),
                 const SizedBox(height: 16),
                 
-                // 余额信息牌
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                   decoration: BoxDecoration(
@@ -202,7 +331,6 @@ class _UserProfilePageState extends State<UserProfilePage> {
                       const SizedBox(width: 6),
                       const Text('0', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                       const SizedBox(width: 12),
-                      // 🚨 已在此处接入全局动态货币名称
                       Text('$_balance ${widget.api.currencyName}', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                     ],
                   ),
@@ -221,6 +349,8 @@ class _UserProfilePageState extends State<UserProfilePage> {
           const SizedBox(height: 12),
           _buildSectionTitle('个人记录'),
           _buildMenuGroup([
+            // 🚨 完美挂载：打赏明细列表
+            _MenuAction(icon: Icons.card_giftcard, title: '打赏明细', color: Colors.deepOrange, onTap: () => _navigateToActivity('打赏明细', 'money-rewards')),
             _MenuAction(icon: Icons.payments_outlined, title: '积分记录', color: Colors.amber, onTap: () => _navigateToActivity('积分记录', 'money-log')),
             _MenuAction(icon: Icons.warning_amber_rounded, title: warningTitle, color: Colors.red, onTap: () => _navigateToActivity('站务警告', 'warnings')),
           ]),
@@ -228,7 +358,8 @@ class _UserProfilePageState extends State<UserProfilePage> {
           const SizedBox(height: 12),
           _buildSectionTitle('系统设置'),
           _buildMenuGroup([
-            _MenuAction(icon: Icons.settings_outlined, title: '账号设置', color: Colors.grey.shade700, onTap: () {}),
+            // 🚨 账号设置接入弹窗处理逻辑
+            _MenuAction(icon: Icons.settings_outlined, title: '账号设置', color: Colors.grey.shade700, onTap: _showAccountSettingsMenu),
             _MenuAction(icon: Icons.exit_to_app, title: '退出登录', color: Colors.red, onTap: () {
               showDialog(
                 context: context,
