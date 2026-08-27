@@ -26,7 +26,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
   
   String _balance = '0';
   int _warningCount = 0;
-  String? _currentEmail; // 记录当前登录用户的注册邮箱
+  String? _currentEmail; 
 
   @override
   void initState() {
@@ -126,11 +126,11 @@ class _UserProfilePageState extends State<UserProfilePage> {
             content: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Text('点击按钮发送重置链接到您的邮箱以重置密码。', style: TextStyle(color: Colors.grey, fontSize: 14)),
+                const Text('请输入您的注册邮箱，系统将发送重置链接。', style: TextStyle(color: Colors.grey, fontSize: 14)),
                 const SizedBox(height: 16),
                 TextField(
                   controller: emailCtrl,
-                  decoration: const InputDecoration(hintText: '请输入您的注册邮箱', border: OutlineInputBorder(), isDense: true),
+                  decoration: const InputDecoration(hintText: '注册邮箱', border: OutlineInputBorder(), isDense: true),
                 ),
               ],
             ),
@@ -142,7 +142,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
                   final inputEmail = emailCtrl.text.trim();
                   if (inputEmail.isEmpty) return;
                   
-                  // 🚨 安全拦截：验证输入的邮箱是否和当前登录账号绑定的邮箱一致
+                  // 🚨 严密拦截：邮箱校验
                   if (_currentEmail != null && _currentEmail!.isNotEmpty && inputEmail != _currentEmail) {
                       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('输入的邮箱与当前账号不一致')));
                       return;
@@ -161,7 +161,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
                     if (mounted) setStateDialog(() => isSubmitting = false);
                   }
                 }, 
-                child: isSubmitting ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('发送重置密码邮件')
+                child: isSubmitting ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('发送邮件')
               ),
             ],
           )
