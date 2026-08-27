@@ -10,7 +10,6 @@ class ApiClient {
   final Dio _dio;
   final String baseUrl;
   
-  // 🚨 全局动态货币名称：APP 任何页面都可以直接调用 api.currencyName 获取最新名称
   String currencyName = 'XSD'; 
 
   ApiClient({this.baseUrl = 'https://xsop.de'}) : _dio = Dio(BaseOptions(
@@ -40,7 +39,6 @@ class ApiClient {
     ));
   }
 
-  // 🚨 升级：每次请求全站信息时，自动刷新并缓存全局货币名称
   Future<Map<String, dynamic>> getForumInfo() async {
     final response = await _dio.get('/api');
     final data = _asMap(response.data);
@@ -50,7 +48,6 @@ class ApiClient {
        String rawName = attrs['shebaoting-money.moneyname']?.toString() 
                      ?? attrs['antoinefr-money.moneyname']?.toString() 
                      ?? 'XSD';
-       // 提纯名称，去掉类似 [money] 的图标前缀
        rawName = rawName.replaceAll(RegExp(r'\[.*?\]'), '').trim();
        if (rawName.isNotEmpty) {
           currencyName = rawName;
@@ -201,15 +198,6 @@ class ApiClient {
     });
   }
 
-  String _extractErrorCode(dynamic data) {
-    try {
-      if (data is Map && data['errors'] is List && data['errors'].isNotEmpty) {
-        return data['errors'][0]['code']?.toString() ?? '';
-      }
-    } catch (_) {}
-    return '';
-  }
-
   Future<void> buyPost(String ptrId, int discussionId) async {
     try {
        await _dio.get('/api/pay-to-read/payment/', queryParameters: {'id': discussionId});
@@ -232,6 +220,54 @@ class ApiClient {
          throw Exception('系统错误：未能定位相关处理接口。');
       }
       throw Exception('请求中止：服务端已拒绝此项操作。');
+    }
+  }
+
+  // 🚨 全新：精准对接 money-rewards 插件结构的打赏功能
+  Future<void> tipPost(int postId, double amount, String comment) async {
+    try {
+      await _dio.post('/api/money-rewards', data: {
+        "data": {
+          "type": "money-rewards",
+          "attributes": {
+            "amount": amount.toString(),
+            "createMoney": false,
+            "comment": comment
+          },
+          "relationships": {
+            "post": {
+              "data": {"type": "posts", "id": postId.toString()}
+            }
+          }
+        }
+      });
+    } on DioException catch (e) {
+      throw Exception(_extractApiError(e) ?? '系统提示：资产划拨未能完成。');
+    }
+  }
+
+  // 🚨 全新：发送重置密码邮件
+  Future<void> sendPasswordReset(String email) async {
+    try {
+      await _dio.post('/api/forgot', data: {"email": email});
+    } on DioException catch (e) {
+      throw Exception(_extractApiError(e) ?? '发送重置密码邮件失败，请检查邮箱地址是否正确。');
+    }
+  }
+
+  // 🚨 全新：带鉴权的更改邮箱操作
+  Future<void> changeEmail(int userId, String newEmail, String password) async {
+    try {
+      await _dio.patch('/api/users/$userId', data: {
+        "data": {
+          "type": "users",
+          "id": userId.toString(),
+          "attributes": {"email": newEmail}
+        },
+        "meta": {"password": password}
+      });
+    } on DioException catch (e) {
+      throw Exception(_extractApiError(e) ?? '更改邮箱失败，请确认密码是否正确。');
     }
   }
 
@@ -279,6 +315,17 @@ class ApiClient {
   Map<String, dynamic> _asMap(dynamic data) {
     if (data is Map) return Map<String, dynamic>.from(data);
     return <String, dynamic>{};
+  }
+
+  // 智能提取服务端返回的具体错误信息（如“邮箱已被采用”）
+  String? _extractApiError(DioException e) {
+    try {
+      final data = e.response?.data;
+      if (data is Map && data['errors'] is List && data['errors'].isNotEmpty) {
+        return data['errors'][0]['detail']?.toString();
+      }
+    } catch (_) {}
+    return null;
   }
   
   Future<void> _saveAuth(String token, int? userId) async {
