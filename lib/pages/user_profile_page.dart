@@ -26,6 +26,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
   
   String _balance = '0';
   int _warningCount = 0;
+  String? _currentEmail; // 记录当前登录用户的注册邮箱
 
   @override
   void initState() {
@@ -60,6 +61,10 @@ class _UserProfilePageState extends State<UserProfilePage> {
                 _balance = attrs['money'].toString();
              }
              
+             if (attrs.containsKey('email')) {
+                _currentEmail = attrs['email'].toString();
+             }
+             
              if (attrs['warningCount'] != null) {
                 _warningCount = int.tryParse(attrs['warningCount'].toString()) ?? 0;
              } else if (attrs['strikes'] != null) {
@@ -75,7 +80,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
     } catch (e) {
       if (mounted) {
         setState(() {
-          _error = '无法加载用户信息，请检查网络';
+          _error = '加载失败，请检查网络';
           _isLoading = false;
         });
       }
@@ -107,7 +112,6 @@ class _UserProfilePageState extends State<UserProfilePage> {
     }
   }
 
-  // 🚨 账号安全：发送重置密码邮件
   void _showChangePasswordDialog() {
     final emailCtrl = TextEditingController();
     showDialog(
@@ -135,13 +139,21 @@ class _UserProfilePageState extends State<UserProfilePage> {
               FilledButton(
                 style: FilledButton.styleFrom(backgroundColor: const Color(0xFF526D85)),
                 onPressed: isSubmitting ? null : () async {
-                  if (emailCtrl.text.trim().isEmpty) return;
+                  final inputEmail = emailCtrl.text.trim();
+                  if (inputEmail.isEmpty) return;
+                  
+                  // 🚨 安全拦截：验证输入的邮箱是否和当前登录账号绑定的邮箱一致
+                  if (_currentEmail != null && _currentEmail!.isNotEmpty && inputEmail != _currentEmail) {
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('输入的邮箱与当前账号不一致')));
+                      return;
+                  }
+                  
                   setStateDialog(() => isSubmitting = true);
                   try {
-                    await widget.api.sendPasswordReset(emailCtrl.text.trim());
+                    await widget.api.sendPasswordReset(inputEmail);
                     if (mounted) {
                       Navigator.pop(ctx);
-                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已发送重置密码邮件，请查收')));
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('邮件已发送')));
                     }
                   } catch (e) {
                     if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString().replaceAll('Exception: ', ''))));
@@ -158,7 +170,6 @@ class _UserProfilePageState extends State<UserProfilePage> {
     );
   }
 
-  // 🚨 账号安全：更改绑定邮箱
   void _showChangeEmailDialog() {
     if (_user == null) return;
     final emailCtrl = TextEditingController();
@@ -199,7 +210,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
                     await widget.api.changeEmail(int.parse(_user!.id), emailCtrl.text.trim(), pwdCtrl.text.trim());
                     if (mounted) {
                       Navigator.pop(ctx);
-                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('邮箱更改指令已提交')));
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('修改成功')));
                       _loadUserProfile(); 
                     }
                   } catch (e) {
@@ -217,7 +228,6 @@ class _UserProfilePageState extends State<UserProfilePage> {
     );
   }
 
-  // 🚨 账号设置菜单唤出底栏
   void _showAccountSettingsMenu() {
     showModalBottomSheet(
       context: context,
@@ -228,7 +238,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
           mainAxisSize: MainAxisSize.min,
           children: [
             Container(margin: const EdgeInsets.symmetric(vertical: 8), width: 40, height: 4, decoration: BoxDecoration(color: Colors.grey.shade300, borderRadius: BorderRadius.circular(2))),
-            const Padding(padding: EdgeInsets.symmetric(vertical: 8), child: Text('账号安全设置', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold))),
+            const Padding(padding: EdgeInsets.symmetric(vertical: 8), child: Text('账号设置', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold))),
             ListTile(
               leading: const Icon(Icons.lock_reset, color: Colors.blueAccent),
               title: const Text('更改密码'),
@@ -349,7 +359,6 @@ class _UserProfilePageState extends State<UserProfilePage> {
           const SizedBox(height: 12),
           _buildSectionTitle('个人记录'),
           _buildMenuGroup([
-            // 🚨 完美挂载：打赏明细列表
             _MenuAction(icon: Icons.card_giftcard, title: '打赏明细', color: Colors.deepOrange, onTap: () => _navigateToActivity('打赏明细', 'money-rewards')),
             _MenuAction(icon: Icons.payments_outlined, title: '积分记录', color: Colors.amber, onTap: () => _navigateToActivity('积分记录', 'money-log')),
             _MenuAction(icon: Icons.warning_amber_rounded, title: warningTitle, color: Colors.red, onTap: () => _navigateToActivity('站务警告', 'warnings')),
@@ -358,7 +367,6 @@ class _UserProfilePageState extends State<UserProfilePage> {
           const SizedBox(height: 12),
           _buildSectionTitle('系统设置'),
           _buildMenuGroup([
-            // 🚨 账号设置接入弹窗处理逻辑
             _MenuAction(icon: Icons.settings_outlined, title: '账号设置', color: Colors.grey.shade700, onTap: _showAccountSettingsMenu),
             _MenuAction(icon: Icons.exit_to_app, title: '退出登录', color: Colors.red, onTap: () {
               showDialog(
@@ -367,7 +375,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
                   backgroundColor: Colors.white,
                   surfaceTintColor: Colors.transparent,
                   title: const Text('退出登录'),
-                  content: const Text('确定要注销当前账号吗？'),
+                  content: const Text('确定要退出登录吗？'),
                   actions: [
                     TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消', style: TextStyle(color: Colors.grey))),
                     FilledButton(style: FilledButton.styleFrom(backgroundColor: Colors.red), onPressed: () { Navigator.pop(ctx); _logout(); }, child: const Text('确定')),
