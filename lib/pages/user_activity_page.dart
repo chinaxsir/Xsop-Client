@@ -31,7 +31,7 @@ class _UserActivityPageState extends State<UserActivityPage> {
   String? _error;
   List<dynamic> _items = [];
   List<dynamic> _included = [];
-  String _customEmptyMessage = '暂无记录。';
+  String _customEmptyMessage = '暂无记录';
 
   @override
   void initState() {
@@ -49,7 +49,6 @@ class _UserActivityPageState extends State<UserActivityPage> {
     return DateTime.tryParse(s);
   }
 
-  // [HTML 净化器]：强力剥离 <a href="..."> 等所有前端标签代码
   String _stripHtmlTags(String htmlString) {
     RegExp exp = RegExp(r"<[^>]*>", multiLine: true, caseSensitive: true);
     return htmlString.replaceAll(exp, '').trim();
@@ -91,7 +90,7 @@ class _UserActivityPageState extends State<UserActivityPage> {
         final res = await widget.api.getDynamicList('/api/discussions', queryParameters: {'filter[q]': 'author:$uname'});
         _items = res['data'] ?? [];
         _included = res['included'] ?? [];
-        _customEmptyMessage = '未发布任何主题。';
+        _customEmptyMessage = '未发布任何主题';
       } 
       else if (widget.activityType == 'posts') {
         final results = await Future.wait([
@@ -119,7 +118,7 @@ class _UserActivityPageState extends State<UserActivityPage> {
            return true; 
         }).toList();
         
-        _customEmptyMessage = '无回复记录。';
+        _customEmptyMessage = '无回复记录';
       } 
       else if (widget.activityType == 'warnings') {
         final results = await Future.wait([
@@ -147,7 +146,7 @@ class _UserActivityPageState extends State<UserActivityPage> {
         }
         
         _items = finalItems;
-        _customEmptyMessage = '暂无站务警告记录。';
+        _customEmptyMessage = '暂无警告记录';
       } 
       else if (widget.activityType == 'money-log') {
         final endpoints = ['/api/money-log', '/api/users/$uid/moneyHistory', '/api/moneyHistory'];
@@ -186,7 +185,14 @@ class _UserActivityPageState extends State<UserActivityPage> {
         }
         
         _items = finalItems;
-        _customEmptyMessage = '暂无积分记录。';
+        _customEmptyMessage = '暂无积分记录';
+      }
+      // 🚨 新增：打赏明细解析逻辑
+      else if (widget.activityType == 'money-rewards') {
+        final res = await _safeFetch('/api/money-rewards', {'include': 'user,targetUser,post,post.discussion'});
+        _items = res['data'] ?? [];
+        _included = res['included'] ?? [];
+        _customEmptyMessage = '暂无打赏记录';
       }
 
       if (_items.isNotEmpty) {
@@ -208,12 +214,12 @@ class _UserActivityPageState extends State<UserActivityPage> {
             if (e.response?.statusCode == 404) {
                _items = []; _error = null; 
             } else if (e.response?.statusCode == 403) {
-               _error = '权限不足：无法查阅该数据。';
+               _error = '无权限查看该数据';
             } else {
-               _error = '网络请求失败，请稍后重试。';
+               _error = '加载失败，请稍后重试';
             }
           } else {
-             _error = '系统错误：${e.toString()}';
+             _error = '加载失败：${e.toString()}';
           }
           _isLoading = false;
         });
@@ -304,9 +310,101 @@ class _UserActivityPageState extends State<UserActivityPage> {
         if (widget.activityType == 'warnings') return _buildWarningItem(item);
         if (widget.activityType == 'money-log') return _buildMoneyLogItem(item); 
         if (widget.activityType == 'posts') return _buildPostItem(item);
+        if (widget.activityType == 'money-rewards') return _buildMoneyRewardItem(item); // 🚨 打赏明细分发器
         
         return _buildDefaultItem(item);
       },
+    );
+  }
+
+  // 🚨 全新组件：打赏明细 UI，严格复刻网页端卡片
+  Widget _buildMoneyRewardItem(Map<String, dynamic> item) {
+    final attrs = item['attributes'] ?? {};
+    
+    final amount = attrs['amount']?.toString() ?? '0';
+    final comment = attrs['comment']?.toString() ?? '无评论';
+    
+    final sourceUserId = item['relationships']?['user']?['data']?['id']?.toString();
+    final targetUserId = item['relationships']?['targetUser']?['data']?['id']?.toString();
+    final postId = item['relationships']?['post']?['data']?['id']?.toString();
+    
+    final sourceUser = _getIncluded('users', sourceUserId);
+    final targetUser = _getIncluded('users', targetUserId);
+    final post = _getIncluded('posts', postId);
+    
+    final sourceName = sourceUser?['attributes']?['displayName'] ?? sourceUser?['attributes']?['username'] ?? '未知用户';
+    final targetName = targetUser?['attributes']?['displayName'] ?? targetUser?['attributes']?['username'] ?? '未知用户';
+    
+    String discussionTitle = '未知主题';
+    String postNumber = '1';
+    if (post != null) {
+        postNumber = post['attributes']?['number']?.toString() ?? '1';
+        final discussionId = post['relationships']?['discussion']?['data']?['id']?.toString();
+        final discussion = _getIncluded('discussions', discussionId);
+        if (discussion != null) {
+            discussionTitle = discussion['attributes']?['title'] ?? '未知主题';
+        }
+    }
+
+    final timeStr = attrs['createdAt']?.toString();
+    String timeDisplay = '';
+    if (timeStr != null) {
+      final parsedDate = _parseFlexibleDate(timeStr);
+      if (parsedDate != null) timeDisplay = formatRelativeTime(parsedDate);
+    }
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white, 
+        border: Border.all(color: Colors.grey.shade200), 
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 4, offset: const Offset(0, 2))],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.card_giftcard, size: 16, color: Colors.grey.shade500),
+              const SizedBox(width: 8),
+              Text(timeDisplay, style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
+              const Spacer(),
+              Text('$amount ${widget.api.currencyName}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.black87)),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Text('来自', style: TextStyle(color: Colors.grey.shade500, fontSize: 13)),
+              const SizedBox(width: 6),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(color: Colors.grey.shade100, borderRadius: BorderRadius.circular(4)),
+                child: Text(sourceName, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+              ),
+              const SizedBox(width: 12),
+              Text('给', style: TextStyle(color: Colors.grey.shade500, fontSize: 13)),
+              const SizedBox(width: 6),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(color: Colors.grey.shade100, borderRadius: BorderRadius.circular(4)),
+                child: Text(targetName, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text('给「$discussionTitle」主题的 #$postNumber 帖', style: const TextStyle(color: Colors.black87, fontSize: 13)),
+          const SizedBox(height: 8),
+          Container(
+             width: double.infinity,
+             padding: const EdgeInsets.all(10),
+             decoration: BoxDecoration(color: Colors.grey.shade50, borderRadius: BorderRadius.circular(6)),
+             child: Text('评论: $comment', style: TextStyle(color: Colors.grey.shade700, fontSize: 13)),
+          )
+        ],
+      ),
     );
   }
 
@@ -316,7 +414,6 @@ class _UserActivityPageState extends State<UserActivityPage> {
     final amountStr = attrs['money']?.toString() ?? attrs['amount']?.toString() ?? attrs['balance_delta']?.toString() ?? '0';
     final balanceStr = attrs['balance']?.toString() ?? attrs['currentBalance']?.toString() ?? '-';
     
-    // [应用 HTML 净化器]：让带有超链接 <a> 标签的源码秒变纯净中文
     final rawReason = attrs['reason']?.toString() ?? attrs['description']?.toString() ?? attrs['source']?.toString() ?? '系统操作';
     final cleanReason = _stripHtmlTags(rawReason);
     
@@ -407,7 +504,7 @@ class _UserActivityPageState extends State<UserActivityPage> {
     final targetName = targetUser?['attributes']?['displayName'] ?? targetUser?['attributes']?['username'] ?? '您';
 
     final strikes = attrs['strikes'] ?? 0;
-    final comment = attrs['publicComment'] ?? attrs['reason'] ?? '由于违规行为收到警告。';
+    final comment = attrs['publicComment'] ?? attrs['reason'] ?? '由于违规收到警告';
     final timeStr = attrs['createdAt']?.toString();
     
     String timeDisplay = '未知';
@@ -429,13 +526,13 @@ class _UserActivityPageState extends State<UserActivityPage> {
             children: [
               Icon(Icons.warning_amber_rounded, color: Colors.red.shade400, size: 20),
               const SizedBox(width: 8),
-              Text('收到警告记 $strikes 分', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+              Text('警告：记 $strikes 分', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
             ],
           ),
           const SizedBox(height: 12),
           Text(comment, style: const TextStyle(color: Colors.black87, fontSize: 14, height: 1.5)),
           const SizedBox(height: 12),
-          Text('下发方: $adminName', style: TextStyle(color: Colors.grey.shade600, fontSize: 12, fontWeight: FontWeight.bold)),
+          Text('管理员: $adminName', style: TextStyle(color: Colors.grey.shade600, fontSize: 12, fontWeight: FontWeight.bold)),
           const SizedBox(height: 6),
           Text('时间: $timeDisplay', style: TextStyle(color: Colors.grey.shade400, fontSize: 11)),
         ],
