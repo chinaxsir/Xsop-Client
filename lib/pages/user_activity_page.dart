@@ -187,11 +187,9 @@ class _UserActivityPageState extends State<UserActivityPage> {
         _items = finalItems;
         _customEmptyMessage = '暂无积分记录';
       }
-      // 🚨 终极修复：针对第三方插件特殊命名的解析引擎
       else if (widget.activityType.contains('reward')) {
-        _customEmptyMessage = '暂无打赏明细';
+        _customEmptyMessage = '暂无打赏记录';
         
-        // 使用您抓包确认的特定路由，并请求带上相关结构节点
         final results = await Future.wait([
           _safeFetch('/api/users/$uid/money-rewards', {'include': 'giver,receiver,post,post.discussion'}),
           _safeFetch('/api/money-rewards', {'include': 'giver,receiver,post,post.discussion'}),
@@ -207,7 +205,6 @@ class _UserActivityPageState extends State<UserActivityPage> {
         
         final List<dynamic> finalItems = [];
         for (var item in uniqueMap.values) {
-           // 🚨 核心纠错：读取插件作者自行定义的 giver 和 receiver 键名
            final sourceUserId = item['relationships']?['giver']?['data']?['id']?.toString();
            final targetUserId = item['relationships']?['receiver']?['data']?['id']?.toString();
            
@@ -237,9 +234,9 @@ class _UserActivityPageState extends State<UserActivityPage> {
             if (e.response?.statusCode == 404) {
                _items = []; _error = null; 
             } else if (e.response?.statusCode == 403) {
-               _error = '权限不足，无法查阅此数据';
+               _error = '权限不足';
             } else {
-               _error = '网络请求失败，请重试';
+               _error = '加载失败，请重试';
             }
           } else {
              _error = '加载失败：${e.toString()}';
@@ -330,9 +327,10 @@ class _UserActivityPageState extends State<UserActivityPage> {
       itemBuilder: (context, index) {
         final item = _items[index];
         
+        if (widget.activityType == 'discussions') return _buildDiscussionItem(item);
+        if (widget.activityType == 'posts') return _buildPostItem(item);
         if (widget.activityType == 'warnings') return _buildWarningItem(item);
         if (widget.activityType == 'money-log') return _buildMoneyLogItem(item); 
-        if (widget.activityType == 'posts') return _buildPostItem(item);
         if (widget.activityType.contains('reward')) return _buildMoneyRewardItem(item); 
         
         return _buildDefaultItem(item);
@@ -340,14 +338,86 @@ class _UserActivityPageState extends State<UserActivityPage> {
     );
   }
 
-  // 🚨 对齐特殊字段的“打赏明细”渲染器
+  // 🚨 升级重构：发布的主题 - 支持判断删除与跳转
+  Widget _buildDiscussionItem(Map<String, dynamic> item) {
+    final attrs = item['attributes'] ?? {};
+    final timeStr = attrs['createdAt']?.toString();
+    
+    String timeDisplay = '';
+    if (timeStr != null) {
+      try {
+         final parsedDate = _parseFlexibleDate(timeStr);
+         if (parsedDate != null) timeDisplay = formatRelativeTime(parsedDate);
+      } catch (_) {}
+    }
+
+    final discussionId = item['id']?.toString();
+    final String rawTitle = attrs['title']?.toString() ?? '';
+    
+    // 如果后台未返回标题，代表帖子数据已不完整/被删
+    final bool isDeleted = rawTitle.isEmpty;
+    final String displayTitle = isDeleted ? '[主题已被删除]' : rawTitle;
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: InkWell(
+        onTap: () {
+          if (isDeleted || discussionId == null) {
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('该主题已被删除')));
+            return;
+          }
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => DiscussionDetailPage(
+                api: widget.api,
+                discussion: Discussion(
+                  id: discussionId,
+                  title: displayTitle,
+                  commentCount: 0,
+                  createdAt: DateTime.now(),
+                  tags: const [],
+                ),
+              ),
+            ),
+          );
+        },
+        borderRadius: BorderRadius.circular(8),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                displayTitle,
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                  color: isDeleted ? Colors.grey : Colors.black87,
+                  decoration: isDeleted ? TextDecoration.lineThrough : null,
+                )
+              ),
+              const SizedBox(height: 8),
+              Text(timeDisplay, style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // 🚨 升级重构：打赏明细 - 支持判断删除与跳转
   Widget _buildMoneyRewardItem(Map<String, dynamic> item) {
     final attrs = item['attributes'] ?? {};
     
     final amount = attrs['amount']?.toString() ?? '0';
     final comment = attrs['comment']?.toString() ?? '无评论';
     
-    // 采用专属的 giver / receiver 字段定位用户
     final sourceUserId = item['relationships']?['giver']?['data']?['id']?.toString();
     final targetUserId = item['relationships']?['receiver']?['data']?['id']?.toString();
     final postId = item['relationships']?['post']?['data']?['id']?.toString();
@@ -359,16 +429,23 @@ class _UserActivityPageState extends State<UserActivityPage> {
     final sourceName = sourceUser?['attributes']?['displayName'] ?? sourceUser?['attributes']?['username'] ?? '未知用户';
     final targetName = targetUser?['attributes']?['displayName'] ?? targetUser?['attributes']?['username'] ?? '未知用户';
     
-    String discussionTitle = '未知主题';
+    String discussionTitle = '[主题已被删除]';
     String postNumber = '1';
+    String? validDiscussionId;
+
     if (post != null) {
         postNumber = post['attributes']?['number']?.toString() ?? '1';
         final discussionId = post['relationships']?['discussion']?['data']?['id']?.toString();
-        final discussion = _getIncluded('discussions', discussionId);
-        if (discussion != null) {
-            discussionTitle = discussion['attributes']?['title'] ?? '未知主题';
+        if (discussionId != null) {
+            final discussion = _getIncluded('discussions', discussionId);
+            if (discussion != null && discussion['attributes']?['title'] != null) {
+                discussionTitle = discussion['attributes']['title'];
+                validDiscussionId = discussionId;
+            }
         }
     }
+    
+    final bool isDeleted = validDiscussionId == null;
 
     final timeStr = attrs['createdAt']?.toString();
     String timeDisplay = '';
@@ -420,14 +497,173 @@ class _UserActivityPageState extends State<UserActivityPage> {
             ],
           ),
           const SizedBox(height: 12),
-          Text('给「$discussionTitle」主题的 #$postNumber 帖', style: const TextStyle(color: Colors.black87, fontSize: 13)),
-          const SizedBox(height: 12),
+          
+          // 🚨 跳转入口：点击即可访问帖子，如果是已删除帖会直接阻断并提示
+          InkWell(
+            onTap: () {
+              if (isDeleted) {
+                 ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('该主题已被删除')));
+                 return;
+              }
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => DiscussionDetailPage(
+                    api: widget.api,
+                    discussion: Discussion(
+                      id: validDiscussionId!,
+                      title: discussionTitle,
+                      commentCount: 0,
+                      createdAt: DateTime.now(),
+                      tags: const [],
+                    ),
+                  ),
+                ),
+              );
+            },
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4.0),
+              child: Text.rich(
+                TextSpan(
+                  children: [
+                    const TextSpan(text: '给「'),
+                    TextSpan(
+                      text: discussionTitle,
+                      style: TextStyle(
+                        color: isDeleted ? Colors.grey : Colors.blueAccent,
+                        decoration: isDeleted ? TextDecoration.lineThrough : null,
+                      ),
+                    ),
+                    TextSpan(text: '」主题的 #$postNumber 帖'),
+                  ],
+                  style: const TextStyle(color: Colors.black87, fontSize: 13),
+                ),
+              ),
+            ),
+          ),
+          
+          const SizedBox(height: 8),
           Container(
              width: double.infinity,
              padding: const EdgeInsets.all(10),
              decoration: BoxDecoration(color: Colors.grey.shade50, borderRadius: BorderRadius.circular(6)),
              child: Text('评论: $comment', style: TextStyle(color: Colors.grey.shade700, fontSize: 13)),
           )
+        ],
+      ),
+    );
+  }
+
+  // 🚨 我的回复 - 支持判断删除与跳转
+  Widget _buildPostItem(Map<String, dynamic> item) {
+    final attrs = item['attributes'] ?? {};
+    final timeStr = attrs['createdAt']?.toString();
+    
+    String timeDisplay = '';
+    if (timeStr != null) {
+      try { 
+         final parsedDate = _parseFlexibleDate(timeStr);
+         if (parsedDate != null) timeDisplay = formatRelativeTime(parsedDate);
+      } catch (_) {}
+    }
+
+    String discussionTitle = '[主题已被删除]';
+    String? validDiscussionId;
+    final discussionId = attrs['discussionId']?.toString() ?? item['relationships']?['discussion']?['data']?['id']?.toString();
+    
+    if (discussionId != null) {
+      final dNode = _getIncluded('discussions', discussionId);
+      if (dNode != null && dNode['attributes']?['title'] != null) {
+         discussionTitle = dNode['attributes']['title'];
+         validDiscussionId = discussionId;
+      }
+    }
+    
+    final bool isDeleted = validDiscussionId == null;
+    final rawHtml = attrs['contentHtml'];
+    final rawContent = attrs['content'];
+    
+    String safeHtmlContent = '';
+    if (rawHtml is String && rawHtml.isNotEmpty) {
+      safeHtmlContent = rawHtml;
+    } else if (rawContent is String) {
+      safeHtmlContent = rawContent;
+    } else {
+      safeHtmlContent = '<p style="color: grey;">[内容已隐藏]</p>';
+    }
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 8, offset: const Offset(0, 2))],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          InkWell(
+            onTap: () {
+              if (isDeleted) {
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('该主题已被删除')));
+                return;
+              }
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => DiscussionDetailPage(
+                    api: widget.api,
+                    discussion: Discussion(
+                      id: validDiscussionId!, 
+                      title: discussionTitle,
+                      commentCount: 0, 
+                      createdAt: DateTime.now(),
+                      tags: const [], 
+                    ),
+                  ),
+                ),
+              );
+            },
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: BoxDecoration(
+                color: Colors.red.shade50.withOpacity(0.3),
+                border: Border.all(color: Colors.red.shade100, width: 1.5),
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
+              ),
+              child: Text.rich(
+                TextSpan(
+                  children: [
+                    const TextSpan(text: '在「', style: TextStyle(color: Colors.black87, fontWeight: FontWeight.w500)),
+                    TextSpan(
+                      text: discussionTitle, 
+                      style: TextStyle(
+                        color: isDeleted ? Colors.grey : Colors.blueAccent, 
+                        fontWeight: FontWeight.w600,
+                        decoration: isDeleted ? TextDecoration.lineThrough : null,
+                      )
+                    ),
+                    const TextSpan(text: '」主题中的回复', style: TextStyle(color: Colors.black87, fontWeight: FontWeight.w500)),
+                  ],
+                ),
+                style: const TextStyle(fontSize: 14),
+              ),
+            ),
+          ),
+          
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: HtmlWidget(
+              safeHtmlContent, 
+              textStyle: TextStyle(fontSize: 14, color: Colors.grey.shade800, height: 1.6)
+            ),
+          ),
+          
+          Padding(
+            padding: const EdgeInsets.only(left: 16, right: 16, bottom: 16),
+            child: Text('时间：$timeDisplay', style: TextStyle(fontSize: 12, color: Colors.grey.shade400)),
+          ),
         ],
       ),
     );
@@ -560,105 +796,6 @@ class _UserActivityPageState extends State<UserActivityPage> {
           Text('管理员: $adminName', style: TextStyle(color: Colors.grey.shade600, fontSize: 12, fontWeight: FontWeight.bold)),
           const SizedBox(height: 6),
           Text('时间: $timeDisplay', style: TextStyle(color: Colors.grey.shade400, fontSize: 11)),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildPostItem(Map<String, dynamic> item) {
-    final attrs = item['attributes'] ?? {};
-    final timeStr = attrs['createdAt']?.toString();
-    
-    String timeDisplay = '';
-    if (timeStr != null) {
-      try { 
-         final parsedDate = _parseFlexibleDate(timeStr);
-         if (parsedDate != null) timeDisplay = formatRelativeTime(parsedDate);
-      } catch (_) {}
-    }
-
-    String discussionTitle = '未知帖子';
-    final discussionId = attrs['discussionId']?.toString() ?? item['relationships']?['discussion']?['data']?['id']?.toString();
-    if (discussionId != null) {
-      final dNode = _getIncluded('discussions', discussionId);
-      if (dNode != null) discussionTitle = dNode['attributes']?['title'] ?? '未知帖子';
-    }
-    
-    final rawHtml = attrs['contentHtml'];
-    final rawContent = attrs['content'];
-    
-    String safeHtmlContent = '';
-    if (rawHtml is String && rawHtml.isNotEmpty) {
-      safeHtmlContent = rawHtml;
-    } else if (rawContent is String) {
-      safeHtmlContent = rawContent;
-    } else {
-      safeHtmlContent = '<p style="color: grey;">[内容已隐藏]</p>';
-    }
-
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(8),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 8, offset: const Offset(0, 2))],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          InkWell(
-            onTap: () {
-              if (discussionId != null) {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => DiscussionDetailPage(
-                      api: widget.api,
-                      discussion: Discussion(
-                        id: discussionId, 
-                        title: discussionTitle,
-                        commentCount: 0, 
-                        createdAt: DateTime.now(),
-                        tags: const [], 
-                      ),
-                    ),
-                  ),
-                );
-              }
-            },
-            child: Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              decoration: BoxDecoration(
-                color: Colors.red.shade50.withOpacity(0.3),
-                border: Border.all(color: Colors.red.shade100, width: 1.5),
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
-              ),
-              child: Text.rich(
-                TextSpan(
-                  children: [
-                    const TextSpan(text: '在「', style: TextStyle(color: Colors.black87, fontWeight: FontWeight.w500)),
-                    TextSpan(text: discussionTitle, style: const TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.w600)),
-                    const TextSpan(text: '」主题中的回复', style: TextStyle(color: Colors.black87, fontWeight: FontWeight.w500)),
-                  ],
-                ),
-                style: const TextStyle(fontSize: 14),
-              ),
-            ),
-          ),
-          
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: HtmlWidget(
-              safeHtmlContent, 
-              textStyle: TextStyle(fontSize: 14, color: Colors.grey.shade800, height: 1.6)
-            ),
-          ),
-          
-          Padding(
-            padding: const EdgeInsets.only(left: 16, right: 16, bottom: 16),
-            child: Text('时间：$timeDisplay', style: TextStyle(fontSize: 12, color: Colors.grey.shade400)),
-          ),
         ],
       ),
     );
