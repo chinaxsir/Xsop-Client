@@ -203,68 +203,70 @@ class ApiClient {
        await _dio.get('/api/pay-to-read/payment/', queryParameters: {'id': discussionId});
     } catch (_) {}
 
-    final ziivenUrl = '/api/pay-to-read/payment/pay';
-
     try {
-      final response = await _dio.post(ziivenUrl, data: {"id": ptrId});
+      final response = await _dio.post('/api/pay-to-read/payment/pay', data: {"id": ptrId});
       if (response.statusCode == 201) return; 
       throw Exception('操作失败');
     } on DioException catch (e) {
       final code = e.response?.statusCode;
       final errStr = e.response?.data?.toString() ?? '';
-      
       if (errStr.contains('不足') || errStr.contains('没钱') || errStr.contains('insufficient') || code == 403) {
-         throw Exception('余额不足或没有权限'); 
-      }
-      if (code == 404 || code == 405) {
-         throw Exception('接口不存在');
+         throw Exception('余额不足'); 
       }
       throw Exception('操作失败');
     }
   }
 
-  // 🚨 修正：严格对齐用户截图的精准打赏载荷
+  // 🚨 修复：严格对齐用户提供的 Payload 截图
   Future<void> tipPost(int postId, double amount, String comment) async {
-    final payload = {
-       "data": {
-          "attributes": {
-             "amount": amount.toString(),
-             "createMoney": false,
-             "comment": comment
-          }
-       }
+    // 载荷 1：直接包裹 attributes（对齐图1）
+    final payload1 = {
+      "data": {
+        "attributes": {
+          "amount": amount.toString(),
+          "createMoney": false,
+          "comment": comment
+        }
+      }
     };
     
-    // 尝试两个最有可能的打赏端点
-    final endpoints = [
-       '/api/posts/$postId/money-rewards',
-       '/api/money-rewards'
-    ];
+    // 载荷 2：包含 relationships（以防后端严苛校验）
+    final payload2 = {
+      "data": {
+        "type": "money-rewards",
+        "attributes": {
+          "amount": amount.toString(),
+          "createMoney": false,
+          "comment": comment
+        },
+        "relationships": {
+           "post": {"data": {"type": "posts", "id": postId.toString()}}
+        }
+      }
+    };
 
     DioException? bestErr;
-    
+    final endpoints = ['/api/posts/$postId/money-rewards', '/api/money-rewards'];
+
     for (var ep in endpoints) {
-        try {
-           final response = await _dio.post(ep, data: payload);
-           if (response.statusCode == 201 || response.statusCode == 200) return;
-        } on DioException catch (e) {
+      for (var p in [payload1, payload2]) {
+         try {
+           final response = await _dio.post(ep, data: p);
+           if (response.statusCode == 200 || response.statusCode == 201) return;
+         } on DioException catch (e) {
            bestErr = e;
-           final code = e.response?.statusCode;
-           if (code == 404 || code == 405) continue; 
-           throw Exception(_extractApiError(e) ?? '打赏失败');
-        }
+         }
+      }
     }
     
-    if (bestErr != null) {
-       throw Exception(_extractApiError(bestErr) ?? '打赏失败');
-    }
+    throw Exception(_extractApiError(bestErr) ?? '打赏失败');
   }
 
   Future<void> sendPasswordReset(String email) async {
     try {
       await _dio.post('/api/forgot', data: {"email": email});
     } on DioException catch (e) {
-      throw Exception(_extractApiError(e) ?? '发送重置邮件失败');
+      throw Exception(_extractApiError(e) ?? '发送失败');
     }
   }
 
@@ -279,7 +281,7 @@ class ApiClient {
         "meta": {"password": password}
       });
     } on DioException catch (e) {
-      throw Exception(_extractApiError(e) ?? '操作失败');
+      throw Exception(_extractApiError(e) ?? '修改失败');
     }
   }
 
@@ -329,13 +331,14 @@ class ApiClient {
     return <String, dynamic>{};
   }
 
-  // 🚨 升级报错解析器：精准定位 "邮箱已被采用" 等服务器原生错误
-  String? _extractApiError(DioException e) {
+  // 🚨 升级报错解析器：提取真正的底层错误（如"邮箱已被采用"）
+  String? _extractApiError(DioException? e) {
+    if (e == null) return null;
     try {
       final data = e.response?.data;
       if (data is Map) {
         if (data['errors'] is List && data['errors'].isNotEmpty) {
-          return data['errors'][0]['detail']?.toString();
+          return data['errors'][0]['detail']?.toString() ?? data['errors'][0]['code']?.toString();
         }
         if (data['message'] != null) {
           return data['message'].toString();
