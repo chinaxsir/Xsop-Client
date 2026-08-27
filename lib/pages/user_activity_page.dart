@@ -187,16 +187,14 @@ class _UserActivityPageState extends State<UserActivityPage> {
         _items = finalItems;
         _customEmptyMessage = '暂无积分记录';
       }
-      // 🚨 终极修复：打赏明细多重交叉拉取引擎
+      // 🚨 终极修复：针对第三方插件特殊命名的解析引擎
       else if (widget.activityType.contains('reward')) {
         _customEmptyMessage = '暂无打赏明细';
         
-        // 分别发起“我是打赏人”、“我是接收人”以及“全站广域查询”的请求，防止后端参数拦截
+        // 使用您抓包确认的特定路由，并请求带上相关结构节点
         final results = await Future.wait([
-          _safeFetch('/api/money-rewards', {'filter[user]': uid, 'include': 'user,targetUser,post,post.discussion'}),
-          _safeFetch('/api/money-rewards', {'filter[targetUser]': uid, 'include': 'user,targetUser,post,post.discussion'}),
-          _safeFetch('/api/money-rewards', {'include': 'user,targetUser,post,post.discussion'}),
-          _safeFetch('/api/users/$uid/money-rewards', {'include': 'user,targetUser,post,post.discussion'}),
+          _safeFetch('/api/users/$uid/money-rewards', {'include': 'giver,receiver,post,post.discussion'}),
+          _safeFetch('/api/money-rewards', {'include': 'giver,receiver,post,post.discussion'}),
         ]);
 
         final Map<String, dynamic> uniqueMap = {};
@@ -209,12 +207,11 @@ class _UserActivityPageState extends State<UserActivityPage> {
         
         final List<dynamic> finalItems = [];
         for (var item in uniqueMap.values) {
-           // 双重判定：关联节点 ID 或 属性原生 ID
-           final sourceUserId = item['relationships']?['user']?['data']?['id']?.toString() ?? item['attributes']?['userId']?.toString();
-           final targetUserId = item['relationships']?['targetUser']?['data']?['id']?.toString() ?? item['attributes']?['targetUserId']?.toString();
+           // 🚨 核心纠错：读取插件作者自行定义的 giver 和 receiver 键名
+           final sourceUserId = item['relationships']?['giver']?['data']?['id']?.toString();
+           final targetUserId = item['relationships']?['receiver']?['data']?['id']?.toString();
            
-           // 只要当前记录的“发出方”或“接收方”是当前登录用户，就提纯保留
-           if (sourceUserId == uid || targetUserId == uid) {
+           if (sourceUserId == uid || targetUserId == uid || sourceUserId == null) {
               finalItems.add(item);
            }
         }
@@ -336,23 +333,24 @@ class _UserActivityPageState extends State<UserActivityPage> {
         if (widget.activityType == 'warnings') return _buildWarningItem(item);
         if (widget.activityType == 'money-log') return _buildMoneyLogItem(item); 
         if (widget.activityType == 'posts') return _buildPostItem(item);
-        if (widget.activityType.contains('reward')) return _buildMoneyRewardItem(item); // 渲染打赏明细
+        if (widget.activityType.contains('reward')) return _buildMoneyRewardItem(item); 
         
         return _buildDefaultItem(item);
       },
     );
   }
 
-  // 🚨 对齐网页端样式的“打赏明细”渲染器
+  // 🚨 对齐特殊字段的“打赏明细”渲染器
   Widget _buildMoneyRewardItem(Map<String, dynamic> item) {
     final attrs = item['attributes'] ?? {};
     
     final amount = attrs['amount']?.toString() ?? '0';
     final comment = attrs['comment']?.toString() ?? '无评论';
     
-    final sourceUserId = item['relationships']?['user']?['data']?['id']?.toString() ?? attrs['userId']?.toString();
-    final targetUserId = item['relationships']?['targetUser']?['data']?['id']?.toString() ?? attrs['targetUserId']?.toString();
-    final postId = item['relationships']?['post']?['data']?['id']?.toString() ?? attrs['postId']?.toString();
+    // 采用专属的 giver / receiver 字段定位用户
+    final sourceUserId = item['relationships']?['giver']?['data']?['id']?.toString();
+    final targetUserId = item['relationships']?['receiver']?['data']?['id']?.toString();
+    final postId = item['relationships']?['post']?['data']?['id']?.toString();
     
     final sourceUser = _getIncluded('users', sourceUserId);
     final targetUser = _getIncluded('users', targetUserId);
