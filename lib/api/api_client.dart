@@ -82,9 +82,15 @@ class ApiClient {
     return data;
   }
 
-  // 🚨 新增：获取 fof/pages 单页数据接口
+  // 获取指定的单个页面内容（用于点击进入后展示）
   Future<Map<String, dynamic>> getCustomPage(String pageId) async {
     final response = await _dio.get('/api/pages/$pageId');
+    return _asMap(response.data);
+  }
+
+  // 🚨 新增：获取 fof/pages 扩展生成的所有单页目录（用于动态构建菜单）
+  Future<Map<String, dynamic>> getPagesList() async {
+    final response = await _dio.get('/api/pages');
     return _asMap(response.data);
   }
 
