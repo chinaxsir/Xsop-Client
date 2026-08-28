@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:xsop_forum/api/api_client.dart';
 import 'package:xsop_forum/models/flarum_models.dart';
 import 'package:xsop_forum/pages/user_activity_page.dart';
+import 'package:xsop_forum/pages/custom_page.dart'; // 🚨 引入自定义单页容器
 
 class UserProfilePage extends StatefulWidget {
   final ApiClient api;
@@ -104,6 +105,20 @@ class _UserProfilePageState extends State<UserProfilePage> {
       _loadUserProfile();
     }
   }
+  
+  // 🚨 新增：跳转至从后台同步的自定义单页
+  void _navigateToCustomPage(String pageId, String title) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => CustomPage(
+          api: widget.api,
+          pageId: pageId,
+          title: title,
+        ),
+      ),
+    );
+  }
 
   void _logout() async {
     await widget.api.logout();
@@ -143,7 +158,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
                   if (inputEmail.isEmpty) return;
                   
                   if (_currentEmail != null && _currentEmail!.isNotEmpty && inputEmail != _currentEmail) {
-                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('输入的邮箱与当前账号不一致')));
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('输入的邮箱与当前账号不符')));
                       return;
                   }
                   
@@ -209,10 +224,9 @@ class _UserProfilePageState extends State<UserProfilePage> {
                     await widget.api.changeEmail(int.parse(_user!.id), emailCtrl.text.trim(), pwdCtrl.text.trim());
                     if (mounted) {
                       Navigator.pop(ctx);
-                      // 🚨 严密修正：采用官方标准业务描述，告知用户实际发生的安全核验流程
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(
-                          content: Text('系统已发送验证邮件，请前往新邮箱点击链接激活生效。'),
+                          content: Text('已发送验证邮件，请前往新邮箱点击链接激活。'),
                           duration: Duration(seconds: 4),
                         )
                       );
@@ -354,6 +368,14 @@ class _UserProfilePageState extends State<UserProfilePage> {
             ),
           ),
           
+          // 🚨 新增：平台服务导航矩阵 (读取 ID=4 和 ID=3)
+          const SizedBox(height: 12),
+          _buildSectionTitle('平台服务'),
+          _buildMenuGroup([
+            _MenuAction(icon: Icons.dashboard_customize_outlined, title: '服务阵矩', color: Colors.indigo, onTap: () => _navigateToCustomPage('4', '服务阵矩')),
+            _MenuAction(icon: Icons.gavel_outlined, title: '论坛指引', color: Colors.blueGrey, onTap: () => _navigateToCustomPage('3', '论坛指引')),
+          ]),
+
           const SizedBox(height: 12),
           _buildSectionTitle('论坛交流'),
           _buildMenuGroup([
