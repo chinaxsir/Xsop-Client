@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:xsop_forum/api/api_client.dart';
 import 'package:xsop_forum/models/flarum_models.dart';
 import 'package:xsop_forum/pages/user_activity_page.dart';
-import 'package:xsop_forum/pages/custom_page.dart'; // 🚨 引入自定义单页容器
+import 'package:xsop_forum/pages/custom_page.dart'; 
 
 class UserProfilePage extends StatefulWidget {
   final ApiClient api;
@@ -29,6 +29,9 @@ class _UserProfilePageState extends State<UserProfilePage> {
   int _warningCount = 0;
   String? _currentEmail; 
 
+  // 🚨 动态存储单页列表的数据
+  List<dynamic> _dynamicPagesList = [];
+
   @override
   void initState() {
     super.initState();
@@ -36,6 +39,25 @@ class _UserProfilePageState extends State<UserProfilePage> {
       _user = widget.user;
     }
     _loadUserProfile();
+    _loadDynamicPages(); // 🚨 初始化时，静默拉取全局单页目录
+  }
+
+  // 🚨 新增：拉取单页目录引擎
+  Future<void> _loadDynamicPages() async {
+    try {
+      final res = await widget.api.getPagesList();
+      if (mounted) {
+        setState(() {
+          // 剔除隐藏的单页，只显示启用的
+          _dynamicPagesList = (res['data'] as List<dynamic>? ?? []).where((page) {
+             final isHidden = page['attributes']?['isHidden'] == true;
+             return !isHidden;
+          }).toList();
+        });
+      }
+    } catch (_) {
+      // 就算拉取失败也不影响个人中心的其余核心功能
+    }
   }
 
   Future<void> _loadUserProfile() async {
@@ -57,14 +79,8 @@ class _UserProfilePageState extends State<UserProfilePage> {
           
           try {
              final attrs = data['data']?['attributes'] ?? {};
-             
-             if (attrs.containsKey('money')) {
-                _balance = attrs['money'].toString();
-             }
-             
-             if (attrs.containsKey('email')) {
-                _currentEmail = attrs['email'].toString();
-             }
+             if (attrs.containsKey('money')) _balance = attrs['money'].toString();
+             if (attrs.containsKey('email')) _currentEmail = attrs['email'].toString();
              
              if (attrs['warningCount'] != null) {
                 _warningCount = int.tryParse(attrs['warningCount'].toString()) ?? 0;
@@ -106,7 +122,6 @@ class _UserProfilePageState extends State<UserProfilePage> {
     }
   }
   
-  // 🚨 新增：跳转至从后台同步的自定义单页
   void _navigateToCustomPage(String pageId, String title) {
     Navigator.push(
       context,
@@ -305,7 +320,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
           children: [
             Text(_error ?? '未知错误', style: TextStyle(color: Colors.grey.shade600)),
             const SizedBox(height: 16),
-            FilledButton.tonal(onPressed: _loadUserProfile, child: const Text('重试')),
+            FilledButton.tonal(onPressed: () { _loadUserProfile(); _loadDynamicPages(); }, child: const Text('重试')),
           ],
         ),
       );
@@ -314,8 +329,14 @@ class _UserProfilePageState extends State<UserProfilePage> {
     final displayName = _user!.displayName.isNotEmpty ? _user!.displayName : _user!.username;
     String warningTitle = _warningCount > 0 ? '站务警告 ($_warningCount)' : '站务警告';
 
+    // 为了保持 UI 的丰富度，建立一个动态颜色的分配池
+    final dynamicColors = [Colors.indigo, Colors.blueGrey, Colors.teal, Colors.deepPurple];
+    final dynamicIcons = [Icons.dashboard_customize_outlined, Icons.gavel_outlined, Icons.explore_outlined, Icons.extension_outlined];
+
     return RefreshIndicator(
-      onRefresh: _loadUserProfile,
+      onRefresh: () async {
+         await Future.wait([_loadUserProfile(), _loadDynamicPages()]);
+      },
       child: ListView(
         physics: const AlwaysScrollableScrollPhysics(),
         children: [
@@ -368,13 +389,30 @@ class _UserProfilePageState extends State<UserProfilePage> {
             ),
           ),
           
-          // 🚨 新增：平台服务导航矩阵 (读取 ID=4 和 ID=3)
-          const SizedBox(height: 12),
-          _buildSectionTitle('平台服务'),
-          _buildMenuGroup([
-            _MenuAction(icon: Icons.dashboard_customize_outlined, title: '服务阵矩', color: Colors.indigo, onTap: () => _navigateToCustomPage('4', '服务阵矩')),
-            _MenuAction(icon: Icons.gavel_outlined, title: '论坛指引', color: Colors.blueGrey, onTap: () => _navigateToCustomPage('3', '论坛指引')),
-          ]),
+          // 🚨 动态渲染区：如果服务端拉取到了任何启用的单页，就动态渲染为这组菜单
+          if (_dynamicPagesList.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            _buildSectionTitle('平台服务'),
+            _buildMenuGroup(
+              _dynamicPagesList.asMap().entries.map((entry) {
+                final int idx = entry.key;
+                final page = entry.value;
+                final id = page['id'].toString();
+                final title = page['attributes']?['title']?.toString() ?? '未命名页面';
+                
+                // 循环使用备选颜色和图标
+                final color = dynamicColors[idx % dynamicColors.length];
+                final icon = dynamicIcons[idx % dynamicIcons.length];
+
+                return _MenuAction(
+                  icon: icon, 
+                  title: title, 
+                  color: color, 
+                  onTap: () => _navigateToCustomPage(id, title)
+                );
+              }).toList()
+            ),
+          ],
 
           const SizedBox(height: 12),
           _buildSectionTitle('论坛交流'),
