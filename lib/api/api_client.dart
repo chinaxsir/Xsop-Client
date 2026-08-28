@@ -82,6 +82,12 @@ class ApiClient {
     return data;
   }
 
+  // 🚨 新增：获取 fof/pages 单页数据接口
+  Future<Map<String, dynamic>> getCustomPage(String pageId) async {
+    final response = await _dio.get('/api/pages/$pageId');
+    return _asMap(response.data);
+  }
+
   Future<Map<String, dynamic>> getDiscussions({int page = 1, int pageSize = 20, String? tag, String? author, String? sort}) async {
     final query = <String, dynamic>{'page[number]': page, 'page[size]': pageSize};
     if (tag != null && tag.isNotEmpty) query['filter[tag]'] = tag.trim();
@@ -217,9 +223,7 @@ class ApiClient {
     }
   }
 
-  // 🚨 修复：严格对齐用户提供的 Payload 截图
   Future<void> tipPost(int postId, double amount, String comment) async {
-    // 载荷 1：直接包裹 attributes（对齐图1）
     final payload1 = {
       "data": {
         "attributes": {
@@ -230,7 +234,6 @@ class ApiClient {
       }
     };
     
-    // 载荷 2：包含 relationships（以防后端严苛校验）
     final payload2 = {
       "data": {
         "type": "money-rewards",
@@ -281,7 +284,7 @@ class ApiClient {
         "meta": {"password": password}
       });
     } on DioException catch (e) {
-      throw Exception(_extractApiError(e) ?? '修改失败');
+      throw Exception(_extractApiError(e) ?? '操作失败');
     }
   }
 
@@ -331,7 +334,6 @@ class ApiClient {
     return <String, dynamic>{};
   }
 
-  // 🚨 升级报错解析器：提取真正的底层错误（如"邮箱已被采用"）
   String? _extractApiError(DioException? e) {
     if (e == null) return null;
     try {
